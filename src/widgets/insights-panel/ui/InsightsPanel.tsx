@@ -1,7 +1,7 @@
 // Path: src/widgets/insights-panel/ui/InsightsPanel.tsx
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { User as SupabaseUser } from '@supabase/supabase-js';
-import { Users, User as UserIcon, Check, Plus, MessageSquarePlus, Bell, MessageCircle, ArrowLeft, Loader2, ChevronDown } from 'lucide-react';
+import { Users, User as UserIcon, Check, Plus, MessageSquarePlus, Bell, MessageCircle, ArrowLeft, Loader2, ChevronDown, X } from 'lucide-react';
 import { AddCommentForm } from '../../../features/comments/add-comment/ui/AddCommentForm';
 import { CommentThread } from '../../../widgets/comment-threads/ui/CommentThread';
 import { Verse } from '../../../entities/verse/ui/VerseCard';
@@ -58,12 +58,13 @@ interface InsightsPanelProps {
   
   setIsManageGroupsOpen: (isOpen: boolean) => void;
   setShowAuth: (show: boolean) => void;
+  onCloseMobile?: () => void;
 }
 
 export const InsightsPanel = ({
   user, activeBook, activeChapter, selectedVerse, isLoading, onSelectVerse,
   activeGroupId, setActiveGroupId, myGroups,
-  setIsManageGroupsOpen, setShowAuth
+  setIsManageGroupsOpen, setShowAuth, onCloseMobile
 }: InsightsPanelProps) => {
   const [viewMode, setViewMode] = useState<'thread' | 'notifications'>('thread');
   const [isAddingInsight, setIsAddingInsight] = useState(false);
@@ -176,7 +177,7 @@ export const InsightsPanel = ({
   const activeVerseId = selectedVerse?.verse_id || selectedVerse?.id;
 
   return (
-    <section className="w-112.5 flex-none bg-slate-50 dark:bg-slate-900/40 flex flex-col relative overflow-hidden border-l border-slate-200 dark:border-slate-800 pointer-events-auto">
+    <section className="w-full md:w-112.5 flex-none bg-slate-50 dark:bg-slate-900/40 flex flex-col relative overflow-hidden md:border-l border-slate-200 dark:border-slate-800 pointer-events-auto h-full">
       
       {selectedVerse && isAddingInsight && activeVerseId !== undefined && (
         <div className="absolute inset-0 z-50 bg-white dark:bg-slate-950 flex flex-col animate-in slide-in-from-bottom-8 duration-300">
@@ -191,7 +192,7 @@ export const InsightsPanel = ({
         </div>
       )}
 
-      <div className="flex-none px-6 py-4 border-b border-slate-200 dark:border-slate-800 bg-slate-50/80 dark:bg-slate-900/80 backdrop-blur-sm z-30 flex items-center justify-between">
+      <div className="flex-none px-4 md:px-6 py-4 border-b border-slate-200 dark:border-slate-800 bg-slate-50/80 dark:bg-slate-900/80 backdrop-blur-sm z-30 flex items-center justify-between">
         {viewMode === 'notifications' ? (
           <div className="flex items-center gap-3">
              <button 
@@ -205,13 +206,13 @@ export const InsightsPanel = ({
              <h3 className="text-xs font-black uppercase tracking-widest text-slate-900 dark:text-white">Activity</h3>
           </div>
         ) : (
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-2 md:gap-3">
             {selectedVerse ? (
               <>
                 <h3 className="text-[10px] font-black uppercase tracking-widest text-indigo-500 whitespace-nowrap">
                   {getBookAbbreviation(decodeURIComponent(activeBook))} {activeChapter}:{selectedVerse.verse_number || selectedVerse.verse_num}
                 </h3>
-                <span className="text-slate-200 dark:text-slate-800">|</span>
+                <span className="text-slate-200 dark:text-slate-800 hidden sm:inline">|</span>
                 <div className="relative" ref={groupMenuRef}>
                   {/* Enhanced "Selectable" Pill Trigger with White-on-Color Icon */}
                   <button 
@@ -219,7 +220,7 @@ export const InsightsPanel = ({
                     onMouseEnter={() => setIsGroupBtnHovered(true)}
                     onMouseLeave={() => setIsGroupBtnHovered(false)}
                     title="Change viewing group"
-                    className={`flex items-center gap-2 px-2.5 py-1 rounded-full transition-all border shadow-sm ${
+                    className={`flex items-center gap-1.5 md:gap-2 px-2.5 py-1 rounded-full transition-all border shadow-sm ${
                       isGroupBtnHovered 
                         ? 'bg-white dark:bg-slate-800 border-indigo-200 dark:border-indigo-900 scale-[1.02]' 
                         : 'bg-slate-100/50 dark:bg-slate-900/50 border-transparent'
@@ -228,10 +229,10 @@ export const InsightsPanel = ({
                     <div className={`w-5 h-5 rounded-full flex items-center justify-center text-white shadow-xs transition-colors ${ActiveColor.hex}`}>
                       <ActiveIcon size={10} strokeWidth={3} />
                     </div>
-                    <span className={`text-[11px] font-bold transition-colors ${isGroupBtnHovered ? 'text-slate-900 dark:text-white' : 'text-slate-600 dark:text-slate-400'}`}>
+                    <span className={`text-[11px] font-bold transition-colors truncate max-w-20 sm:max-w-30 ${isGroupBtnHovered ? 'text-slate-900 dark:text-white' : 'text-slate-600 dark:text-slate-400'}`}>
                       {currentGroupName}
                     </span>
-                    <ChevronDown size={10} className={`ml-0.5 transition-transform ${isGroupMenuOpen ? 'rotate-180' : ''} ${isGroupBtnHovered ? 'text-indigo-400' : 'text-slate-300'}`} />
+                    <ChevronDown size={10} className={`ml-0.5 shrink-0 transition-transform ${isGroupMenuOpen ? 'rotate-180' : ''} ${isGroupBtnHovered ? 'text-indigo-400' : 'text-slate-300'}`} />
                   </button>
 
                   {isGroupMenuOpen && (
@@ -311,28 +312,42 @@ export const InsightsPanel = ({
           </div>
         )}
 
-        <button 
-          onClick={() => {
-            if (!user) return setShowAuth(true);
-            setViewMode(viewMode === 'notifications' ? 'thread' : 'notifications');
-          }}
-          onMouseEnter={() => setIsBellHovered(true)}
-          onMouseLeave={() => setIsBellHovered(false)}
-          className={`p-2 rounded-full transition-all relative ${
-            viewMode === 'notifications' 
-              ? 'bg-indigo-100 text-indigo-600' 
-              : isBellHovered 
-                ? 'bg-slate-100 text-slate-900 dark:bg-slate-800 dark:text-white' 
-                : 'text-slate-400'
-          }`}
-        >
-          <Bell size={18} />
-          {unreadCount > 0 && (
-            <span className="absolute top-1 right-1 w-3.5 h-3.5 bg-rose-500 text-white text-[8px] font-black rounded-full flex items-center justify-center border-2 border-white dark:border-slate-900">
-              {unreadCount}
-            </span>
+        <div className="flex items-center gap-1 md:gap-2">
+          <button 
+            onClick={() => {
+              if (!user) return setShowAuth(true);
+              setViewMode(viewMode === 'notifications' ? 'thread' : 'notifications');
+            }}
+            onMouseEnter={() => setIsBellHovered(true)}
+            onMouseLeave={() => setIsBellHovered(false)}
+            className={`p-2 rounded-full transition-all relative ${
+              viewMode === 'notifications' 
+                ? 'bg-indigo-100 text-indigo-600' 
+                : isBellHovered 
+                  ? 'bg-slate-100 text-slate-900 dark:bg-slate-800 dark:text-white' 
+                  : 'text-slate-400'
+            }`}
+          >
+            <Bell size={18} />
+            {unreadCount > 0 && (
+              <span className="absolute top-1 right-1 w-3.5 h-3.5 bg-rose-500 text-white text-[8px] font-black rounded-full flex items-center justify-center border-2 border-white dark:border-slate-900">
+                {unreadCount}
+              </span>
+            )}
+          </button>
+
+          {/* Mobile-only Close Insights Drawer Button */}
+          {onCloseMobile && (
+            <button
+              onClick={onCloseMobile}
+              className="md:hidden p-2 rounded-full text-slate-400 hover:text-slate-600 hover:bg-slate-200 dark:hover:bg-slate-800 dark:hover:text-slate-200 transition-colors"
+              title="Close Insights"
+              aria-label="Close Insights panel"
+            >
+              <X size={20} />
+            </button>
           )}
-        </button>
+        </div>
       </div>
 
       <div className="flex-1 overflow-y-auto scrollbar-hide pointer-events-auto">
