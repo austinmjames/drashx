@@ -5,7 +5,8 @@ import React, { useState, useRef, useEffect } from 'react';
 import { User as SupabaseUser } from '@supabase/supabase-js';
 import { 
   Users, User as UserIcon, Plus, MessageSquarePlus, 
-  Bell, ArrowLeft, X, Mail, Send, Loader2, MessageCircle
+  Bell, ArrowLeft, X, Mail, Send, Loader2, MessageCircle,
+  ChevronDown, Check
 } from 'lucide-react';
 
 import { ICON_OPTIONS, COLOR_OPTIONS } from '../../../features/groups/manage-groups/ui/CreateGroupView';
@@ -329,14 +330,27 @@ interface InsightsPanelProps {
 export const InsightsPanel = (props: InsightsPanelProps) => {
   const {
     user, activeBook, activeChapter, selectedVerse, isLoading, onSelectVerse,
-    activeGroupId, myGroups, onCloseMobile, setShowAuth
+    activeGroupId, setActiveGroupId, myGroups, onCloseMobile, setShowAuth, setIsManageGroupsOpen
   } = props;
 
   const [viewMode, setViewMode] = useState<ViewMode>('thread');
   const [isAddingInsight, setIsAddingInsight] = useState(false);
+  const [isGroupMenuOpen, setIsGroupMenuOpen] = useState(false);
   const [unreadMentions, setUnreadMentions] = useState(0);
+  const groupMenuRef = useRef<HTMLDivElement>(null);
 
   const activeVerseId = selectedVerse?.verse_id || selectedVerse?.id;
+
+  // Handle Click Outside for Group Menu
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (groupMenuRef.current && !groupMenuRef.current.contains(e.target as Node)) {
+        setIsGroupMenuOpen(false);
+      }
+    };
+    if (isGroupMenuOpen) document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [isGroupMenuOpen]);
 
   // Resolve Branding
   const activeGroup = myGroups.find(g => g.id === activeGroupId);
@@ -378,14 +392,72 @@ export const InsightsPanel = (props: InsightsPanelProps) => {
             </h3>
           )}
 
-          {!isPersonal && (
-            <div className="flex items-center gap-1.5 px-2 py-1 rounded-full bg-slate-100/50 dark:bg-slate-900/50 ml-2">
+          {/* Group Selector Dropdown Trigger */}
+          <div className="relative ml-2" ref={groupMenuRef}>
+            <button 
+              onClick={() => setIsGroupMenuOpen(!isGroupMenuOpen)}
+              title="Switch Study Group"
+              className="flex items-center gap-1.5 px-2 py-1 rounded-full bg-slate-100/50 dark:bg-slate-900/50 border border-transparent hover:border-indigo-200 transition-all"
+            >
               <div className={`w-4 h-4 rounded-full flex items-center justify-center text-white ${ActiveColor.hex}`}>
                 <ActiveIcon size={8} strokeWidth={3} />
               </div>
               <span className="text-[10px] font-bold text-slate-600 dark:text-slate-400 truncate max-w-20">{currentGroupName}</span>
-            </div>
-          )}
+              <ChevronDown size={10} className={`text-slate-400 transition-transform ${isGroupMenuOpen ? 'rotate-180' : ''}`} />
+            </button>
+
+            {/* Selection Menu */}
+            {isGroupMenuOpen && (
+              <div className="absolute left-0 mt-2 w-56 bg-white dark:bg-slate-950 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-2xl z-50 overflow-hidden animate-in fade-in slide-in-from-top-2">
+                <div className="p-2 border-b text-[9px] font-black uppercase tracking-widest text-slate-400 bg-slate-50/50 dark:bg-slate-900/50">Study Context</div>
+                
+                <div className="max-h-64 overflow-y-auto scrollbar-hide py-1">
+                  {/* Personal Option */}
+                  <button 
+                    onClick={() => { setActiveGroupId(user?.id || null); setIsGroupMenuOpen(false); }} 
+                    className={`w-full flex justify-between items-center px-4 py-2.5 text-xs transition-colors hover:bg-slate-50 dark:hover:bg-slate-900 ${activeGroupId === user?.id ? 'text-indigo-600 font-bold bg-indigo-50/30' : 'text-slate-600 dark:text-slate-400'}`}
+                  >
+                    <div className="flex gap-3 items-center"><UserIcon size={14} /> Personal</div>
+                    {activeGroupId === user?.id && <Check size={12} />}
+                  </button>
+
+                  {/* My Groups List */}
+                  {myGroups.length > 0 && (
+                    <div className="mt-1 pt-1 border-t border-slate-100 dark:border-slate-800">
+                      {myGroups.map(group => {
+                        const branding = getGroupBranding(group.icon_url, group.color_theme, false);
+                        const isActive = activeGroupId === group.id;
+                        return (
+                          <button 
+                            key={group.id} 
+                            onClick={() => { setActiveGroupId(group.id); setIsGroupMenuOpen(false); }} 
+                            className={`w-full flex justify-between items-center px-4 py-2.5 text-xs transition-colors hover:bg-slate-50 dark:hover:bg-slate-900 ${isActive ? 'text-indigo-600 font-bold bg-indigo-50/30' : 'text-slate-600 dark:text-slate-400'}`}
+                          >
+                            <div className="flex gap-3 items-center">
+                              <div className={`w-5 h-5 rounded-full flex items-center justify-center text-white ${branding.color.hex}`}>
+                                <branding.Icon size={10} strokeWidth={3} />
+                              </div>
+                              <span className="truncate max-w-[120px]">{group.name}</span>
+                            </div>
+                            {isActive && <Check size={12} />}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+
+                <div className="p-2 border-t border-slate-100 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-900/50">
+                  <button 
+                    onClick={() => { setIsManageGroupsOpen(true); setIsGroupMenuOpen(false); }} 
+                    className="w-full flex items-center gap-3 px-3 py-2 text-[10px] font-black uppercase tracking-widest text-indigo-600 hover:bg-white dark:hover:bg-slate-800 rounded-xl transition-all"
+                  >
+                    <Plus size={14} /> Manage groups
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
         </div>
 
         <div className="flex items-center gap-1">
