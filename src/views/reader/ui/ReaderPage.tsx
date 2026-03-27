@@ -277,7 +277,7 @@ export const ReaderPage = ({ bookName, chapterNumber }: { bookName?: string; cha
         {/* Right Commentary/Insights Pane Wrapper */}
         <div className={`
           absolute md:relative z-40 inset-y-0 right-0 h-full bg-white dark:bg-slate-950 md:bg-transparent transition-transform duration-300 ease-in-out
-          w-[85vw] sm:w-96 md:w-auto
+          w-full md:w-auto
           ${isInsightsOpen ? 'translate-x-0 shadow-2xl md:shadow-none' : 'translate-x-full md:translate-x-0'}
           md:flex
         `}>
