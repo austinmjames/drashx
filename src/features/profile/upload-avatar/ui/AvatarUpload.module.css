@@ -1,0 +1,24 @@
+/* * AvatarUpload Styles
+ * Path: src/features/profile/upload-avatar/ui/AvatarUpload.module.css
+ * Replaces inline styles for preset colors and text colors
+ */
+
+.previewTextWhite {
+  color: #ffffff;
+}
+
+.presetBg0 { background-color: #6366f1; }
+.presetBg1 { background-color: #3b82f6; }
+.presetBg2 { background-color: #0ea5e9; }
+.presetBg3 { background-color: #14b8a6; }
+.presetBg4 { background-color: #10b981; }
+.presetBg5 { background-color: #84cc16; }
+.presetBg6 { background-color: #eab308; }
+.presetBg7 { background-color: #f97316; }
+.presetBg8 { background-color: #ef4444; }
+.presetBg9 { background-color: #ec4899; }
+.presetBg10 { background-color: #a855f7; }
+.presetBg11 { background-color: #8b5cf6; }
+.presetBg12 { background-color: #64748b; }
+.presetBg13 { background-color: #78716c; }
+.presetBg14 { background-color: #0f172a; }
