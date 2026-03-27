@@ -179,7 +179,7 @@ export const CommentItem = ({
         <div className="flex items-center gap-1 shrink-0">
           {isResolved && (
             <span title="Resolved" aria-label="Resolved" className="flex items-center text-blue-300 mr-1">
-              <CheckCircle2 size={12} />
+              <CheckCircle2 size={14} />
             </span>
           )}
 
@@ -205,16 +205,16 @@ export const CommentItem = ({
               {isMenuOpen && (
                 <div className="absolute right-0 mt-1 w-32 bg-white dark:bg-slate-950 rounded-xl shadow-xl border border-slate-200 dark:border-slate-800 z-50 py-1 animate-in fade-in zoom-in-95 duration-200">
                   <button onClick={(e) => { e.stopPropagation(); onEditClick?.(); setIsMenuOpen(false); }} className="w-full flex items-center gap-2 px-3 py-1.5 text-[11px] font-medium text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800/50 transition-colors text-left">
-                    <Edit2 size={10} /> Edit
+                    <Edit2 size={12} /> Edit
                   </button>
                   {comment.parent_id && (
                     <button onClick={(e) => { e.stopPropagation(); onResolveClick?.(); setIsMenuOpen(false); }} className="w-full flex items-center gap-2 px-3 py-1.5 text-[11px] font-medium text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800/50 transition-colors text-left">
-                      <CheckCircle2 size={10} className={comment.is_resolved ? "text-blue-500" : ""} /> 
+                      <CheckCircle2 size={12} className={comment.is_resolved ? "text-blue-500" : ""} /> 
                       {comment.is_resolved ? 'Unresolve' : 'Resolve'}
                     </button>
                   )}
                   <button onClick={(e) => { e.stopPropagation(); onDeleteClick?.(); setIsMenuOpen(false); }} className="w-full flex items-center gap-2 px-3 py-1.5 text-[11px] font-medium text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors text-left">
-                    <Trash2 size={10} /> Delete
+                    <Trash2 size={12} /> Delete
                   </button>
                 </div>
               )}
@@ -237,7 +237,7 @@ export const CommentItem = ({
               isResolved ? 'text-blue-200 hover:text-white' : 'text-indigo-500 hover:text-indigo-600'
             }`}
           >
-            {isTextExpanded ? <><ChevronUp size={12}/> View Less</> : <><ChevronDown size={12}/> View More</>}
+            {isTextExpanded ? <><ChevronUp size={14}/> View Less</> : <><ChevronDown size={14}/> View More</>}
           </button>
         )}
       </div>
@@ -248,13 +248,13 @@ export const CommentItem = ({
             onClick={(e) => { e.stopPropagation(); onLikeClick(); }} 
             onMouseEnter={() => setHoveredIcon('like')}
             onMouseLeave={() => setHoveredIcon(null)}
-            className={`flex items-center gap-1 text-[10px] font-bold transition-all duration-200 ${
+            className={`flex items-center gap-1.5 text-[11px] font-bold transition-all duration-200 ${
               isResolved 
                 ? (comment.user_has_liked || hoveredIcon === 'like' ? 'text-rose-300' : 'text-blue-200')
                 : (comment.user_has_liked || hoveredIcon === 'like' ? 'text-rose-500' : 'text-slate-400')
             }`}
           >
-            <Heart size={12} className={comment.user_has_liked ? 'fill-current' : ''} />
+            <Heart size={14} className={comment.user_has_liked ? 'fill-current' : ''} />
             {comment.likes_count || 0}
           </button>
         )}
@@ -271,7 +271,7 @@ export const CommentItem = ({
             }`} 
             title="Reply"
           >
-            <Reply size={12} />
+            <Reply size={14} />
           </button>
         )}
 
@@ -280,13 +280,13 @@ export const CommentItem = ({
             onClick={(e) => { e.stopPropagation(); onToggleReplies(); }} 
             onMouseEnter={() => setHoveredIcon('thread')}
             onMouseLeave={() => setHoveredIcon(null)}
-            className={`flex items-center gap-1 text-[10px] font-bold transition-all duration-200 ${
+            className={`flex items-center gap-1.5 text-[11px] font-bold transition-all duration-200 ${
               isResolved 
                 ? (isExpanded || hoveredIcon === 'thread' ? 'text-white' : 'text-blue-200')
                 : (isExpanded || hoveredIcon === 'thread' ? 'text-blue-500' : 'text-slate-400')
             }`}
           >
-            <MessageCircle size={12} className={isExpanded ? "fill-current" : ""} />
+            <MessageCircle size={14} className={isExpanded ? "fill-current" : ""} />
             {replyCount}
           </button>
         )}
@@ -296,13 +296,13 @@ export const CommentItem = ({
             onClick={(e) => { e.stopPropagation(); onToggleResolved(); }} 
             onMouseEnter={() => setHoveredIcon('resolved-list')}
             onMouseLeave={() => setHoveredIcon(null)}
-            className={`ml-auto flex items-center gap-1 text-[10px] font-bold transition-all duration-200 px-1.5 py-0.5 rounded ${
+            className={`ml-auto flex items-center gap-1.5 text-[11px] font-bold transition-all duration-200 px-1.5 py-0.5 rounded ${
               isResolved
                 ? (isResolvedExpanded || hoveredIcon === 'resolved-list' ? 'bg-blue-700 text-white' : 'text-blue-200')
                 : (isResolvedExpanded || hoveredIcon === 'resolved-list' ? 'text-emerald-600 bg-emerald-50 dark:bg-emerald-500/10' : 'text-slate-400')
             }`}
           >
-            <CheckCircle2 size={12} className={isResolvedExpanded ? "fill-current" : ""} />
+            <CheckCircle2 size={14} className={isResolvedExpanded ? "fill-current" : ""} />
             {resolvedCount}
           </button>
         )}
