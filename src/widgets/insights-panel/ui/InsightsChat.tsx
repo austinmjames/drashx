@@ -1,7 +1,9 @@
 // Path: src/widgets/insights-panel/ui/InsightsChat.tsx
+"use client";
+
 import React, { useState, useRef, useEffect } from 'react';
 import { User as SupabaseUser } from '@supabase/supabase-js';
-import { Mail, Send, Loader2, AtSign } from 'lucide-react';
+import { Mail, Send, Loader2 } from 'lucide-react';
 import { supabase } from '../../../shared/api/supabase';
 
 interface Message {
@@ -25,7 +27,13 @@ interface InsightsChatProps {
   onChatOpened: () => void;
 }
 
-export const InsightsChat = ({ groupId, user, groupName, onMentionReceived, onChatOpened }: InsightsChatProps) => {
+export const InsightsChat = ({ 
+  groupId, 
+  user, 
+  groupName, 
+  onMentionReceived, 
+  onChatOpened 
+}: InsightsChatProps) => {
   const [messages, setMessages] = useState<Message[]>([]);
   const [newMessage, setNewMessage] = useState('');
   const [isSending, setIsSending] = useState(false);
@@ -34,9 +42,7 @@ export const InsightsChat = ({ groupId, user, groupName, onMentionReceived, onCh
 
   useEffect(() => {
     let isMounted = true;
-    
-    // Notify parent on open without triggering immediate render cycle
-    const timer = setTimeout(() => onChatOpened(), 0);
+    onChatOpened();
 
     const fetchMessages = async () => {
       if (!supabase || !groupId) return;
@@ -61,15 +67,13 @@ export const InsightsChat = ({ groupId, user, groupName, onMentionReceived, onCh
         schema: 'public', 
         table: 'group_messages', 
         filter: `group_id=eq.${groupId}` 
-      }, (payload) => {
-        if (payload.new.has_mention) onMentionReceived();
+      }, () => {
         fetchMessages();
       })
       .subscribe();
 
     return () => {
       isMounted = false;
-      clearTimeout(timer);
       if (channel) supabase?.removeChannel(channel);
     };
   }, [groupId, onMentionReceived, onChatOpened]);
@@ -85,7 +89,7 @@ export const InsightsChat = ({ groupId, user, groupName, onMentionReceived, onCh
     if (!newMessage.trim() || isSending || !user || !supabase) return;
     
     setIsSending(true);
-    const hasMention = newMessage.includes('@everyone') || newMessage.includes('@here') || newMessage.includes('@');
+    const hasMention = newMessage.includes('@') || newMessage.includes('@everyone');
     
     const { error } = await supabase.from('group_messages').insert({
       content: newMessage,
@@ -153,11 +157,6 @@ export const InsightsChat = ({ groupId, user, groupName, onMentionReceived, onCh
           >
             {isSending ? <Loader2 size={16} className="animate-spin" /> : <Send size={16} />}
           </button>
-        </div>
-        <div className="mt-2 flex items-center gap-3 px-1">
-          <p className="text-[9px] text-slate-400 font-bold uppercase tracking-tighter flex items-center gap-1">
-            <AtSign size={10} /> Use @here or @everyone to alert the group
-          </p>
         </div>
       </form>
     </div>

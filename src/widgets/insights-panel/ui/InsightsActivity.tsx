@@ -1,13 +1,21 @@
 // Path: src/widgets/insights-panel/ui/InsightsActivity.tsx
+"use client";
+
 import React, { useState, useEffect } from 'react';
 import { User as SupabaseUser } from '@supabase/supabase-js';
 import { Bell, Loader2, MessageCircle } from 'lucide-react';
 import { supabase } from '../../../shared/api/supabase';
 import { Verse } from '../../../entities/verse/ui/VerseCard';
-import { ViewMode } from './InsightsPanel';
 
 const getBookAbbreviation = (name: string): string => {
-  const map: Record<string, string> = { 'Genesis': 'Gen', 'Exodus': 'Exo', 'Leviticus': 'Lev', 'Numbers': 'Num', 'Deuteronomy': 'Deu' };
+  const map: Record<string, string> = {
+    'Genesis': 'Gen', 'Exodus': 'Exo', 'Leviticus': 'Lev', 'Numbers': 'Num', 'Deuteronomy': 'Deu',
+    'Joshua': 'Jos', 'Judges': 'Jud', 'I Samuel': '1 Sam', 'II Samuel': '2 Sam', 'I Kings': '1 Kin', 'II Kings': '2 Kin',
+    'Isaiah': 'Isa', 'Jeremiah': 'Jer', 'Ezekiel': 'Eze', 'Hosea': 'Hos', 'Joel': 'Joe', 'Amos': 'Amo', 'Obadiah': 'Oba',
+    'Jonah': 'Jon', 'Micah': 'Mic', 'Nahum': 'Nah', 'Habakkuk': 'Hab', 'Zephaniah': 'Zep', 'Haggai': 'Hag', 'Zechariah': 'Zec', 'Malachi': 'Mal',
+    'Psalms': 'Psa', 'Proverbs': 'Pro', 'Job': 'Job', 'Song of Songs': 'Song', 'Ruth': 'Rut', 'Lamentations': 'Lam',
+    'Ecclesiastes': 'Ecc', 'Esther': 'Est', 'Daniel': 'Dan', 'Ezra': 'Ezr', 'Nehemiah': 'Neh', 'I Chronicles': '1 Chr', 'II Chronicles': '2 Chr'
+  };
   return map[name] || name.slice(0, 3);
 };
 
@@ -24,10 +32,14 @@ interface Notification {
 interface InsightsActivityProps {
   user: SupabaseUser;
   onSelectVerse?: (verse: Verse) => void;
-  setViewMode: (mode: ViewMode) => void;
+  setViewMode: (mode: 'thread' | 'notifications' | 'chat') => void;
 }
 
-export const InsightsActivity = ({ user, onSelectVerse, setViewMode }: InsightsActivityProps) => {
+export const InsightsActivity = ({ 
+  user, 
+  onSelectVerse, 
+  setViewMode 
+}: InsightsActivityProps) => {
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [isLoading, setIsLoading] = useState(true);
 
@@ -36,19 +48,25 @@ export const InsightsActivity = ({ user, onSelectVerse, setViewMode }: InsightsA
 
     const loadNotifications = async () => {
       if (!supabase) return;
-      
       try {
+        /**
+         * FIX: DISAMBIGUATION
+         * We use the !column_name syntax to explicitly tell Supabase which foreign key to use
+         * for the 'profiles' and 'verses' tables, resolving the ambiguity error.
+         */
         const { data, error } = await supabase
           .from('notifications')
-          .select('*, actor:actor_id ( display_name, username ), verse_context:verse_id ( book_id, chapter_num, verse_num )')
+          .select(`
+            *, 
+            actor:profiles!actor_id ( display_name, username ), 
+            verse_context:verses!verse_id ( book_id, chapter_num, verse_num )
+          `)
           .eq('user_id', user.id)
           .order('created_at', { ascending: false })
           .limit(20);
 
         if (isMounted) {
-          if (!error && data) {
-            setNotifications(data as unknown as Notification[]);
-          }
+          if (!error && data) setNotifications(data as unknown as Notification[]);
           setIsLoading(false);
         }
       } catch (err) {
@@ -58,23 +76,19 @@ export const InsightsActivity = ({ user, onSelectVerse, setViewMode }: InsightsA
     };
 
     loadNotifications();
-
-    return () => {
-      isMounted = false;
-    };
+    return () => { isMounted = false; };
   }, [user.id]);
 
   const handleNotificationClick = async (notif: Notification) => {
     if (!supabase) return;
-
     if (!notif.is_read) {
       await supabase.from('notifications').update({ is_read: true }).eq('id', notif.id);
       setNotifications(prev => prev.map(n => n.id === notif.id ? { ...n, is_read: true } : n));
     }
-
     if (onSelectVerse && notif.verse_context) {
+      // Ensure numeric IDs are handled correctly based on your schema
       const targetVerse: Verse = {
-        id: notif.verse_id,
+        id: notif.verse_id.toString(),
         verse_id: notif.verse_id,
         verse_num: notif.verse_context.verse_num,
         verse_number: notif.verse_context.verse_num,

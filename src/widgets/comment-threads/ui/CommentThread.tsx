@@ -1,4 +1,3 @@
-// Path: src/widgets/comment-threads/ui/CommentThread.tsx
 import React, { useEffect, useState, useCallback, useRef } from 'react';
 import { supabase } from '../../../shared/api/supabase';
 import { CommentItem, Comment } from '../../../entities/comment/ui/CommentItem';
@@ -8,16 +7,26 @@ interface CommentThreadProps {
   verseId: string | number;
   groupId?: string; 
   referenceLabel?: string; 
+  currentUserId?: string; 
 }
 
-type RawComment = {
-  likes?: { user_id: string }[];
-  [key: string]: unknown;
-};
+interface Profile {
+  username: string;
+  display_name?: string;
+  avatar_url?: string;
+}
 
-export const CommentThread = ({ verseId, groupId, referenceLabel }: CommentThreadProps) => {
-  const [comments, setComments] = useState<Comment[]>([]);
-  const [currentUserId, setCurrentUserId] = useState<string | null>(null);
+// Extend the base Comment type to include the joined profiles and likes
+interface ThreadComment extends Omit<Comment, 'profiles'> {
+  profiles: Profile;
+  likes?: { user_id: string }[];
+  user_has_liked?: boolean;
+  likes_count?: number;
+}
+
+export const CommentThread = ({ verseId, groupId, referenceLabel, currentUserId: propUserId }: CommentThreadProps) => {
+  const [comments, setComments] = useState<ThreadComment[]>([]);
+  const [currentUserId, setCurrentUserId] = useState<string | null>(propUserId || null);
   
   const [replyTo, setReplyTo] = useState<string | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -28,92 +37,83 @@ export const CommentThread = ({ verseId, groupId, referenceLabel }: CommentThrea
   const isInitialMount = useRef(true);
 
   useEffect(() => {
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      setCurrentUserId(session?.user?.id || null);
-    });
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
-      setCurrentUserId(session?.user?.id || null);
-    });
-    return () => subscription.unsubscribe();
-  }, []);
+    if (!currentUserId) {
+      supabase.auth.getSession().then(({ data: { session } }) => {
+        setCurrentUserId(session?.user?.id || null);
+      });
+    }
+  }, [currentUserId]);
 
   const fetchThread = useCallback(async (showLoading = true) => {
-    if (!verseId) return; 
+    if (verseId === undefined || verseId === null) return; 
     if (showLoading) setIsLoading(true);
     
+    // Determine context: Personal mode (groupId === currentUserId) or Group mode
+    const isPersonal = groupId === currentUserId;
+
+    /**
+     * CRITICAL FIX: DISAMBIGUATION
+     * ---------------------------
+     * 1. profiles:profiles!user_id resolves ambiguity between comments and profiles.
+     * 2. likes:likes!comment_id (assuming comment_id is the FK) prevents ambiguity in the likes table.
+     */
     let query = supabase
       .from('comments')
       .select(`
         *,
-        profiles:user_id ( username, display_name, avatar_url ),
-        likes ( user_id )
+        profiles:profiles!user_id ( 
+          username, 
+          display_name, 
+          avatar_url 
+        ),
+        likes:likes!comment_id ( user_id )
       `)
       .eq('verse_id', verseId)
       .order('created_at', { ascending: true });
 
-    if (groupId) query = query.eq('group_id', groupId);
-    else query = query.is('group_id', null);
+    if (isPersonal) {
+      query = query.is('group_id', null).eq('user_id', currentUserId);
+    } else if (groupId) {
+      query = query.eq('group_id', groupId);
+    } else {
+      query = query.is('group_id', null);
+    }
 
     const { data, error } = await query;
 
-    if (!error && data) {
-      const formattedComments = data.map((c: RawComment) => ({
+    if (error) {
+      console.error("Fetch failed:", error.message);
+      // FIX: Clear the old comments out if the fetch fails (or if the group has an error)
+      // This prevents the "stuck on last populated group" bug.
+      setComments([]);
+    } else if (data) {
+      const formattedComments = data.map((c) => ({
         ...c,
         likes_count: c.likes?.length || 0,
-        user_has_liked: c.likes?.some(l => l.user_id === currentUserId) || false
+        user_has_liked: c.likes?.some((l: { user_id: string }) => l.user_id === currentUserId) || false
       }));
-      setComments(formattedComments as unknown as Comment[]);
+      setComments(formattedComments as unknown as ThreadComment[]);
     }
+    
     setIsLoading(false);
   }, [verseId, groupId, currentUserId]);
 
   useEffect(() => {
-    if (!verseId) return;
+    if (verseId === undefined || verseId === null || !currentUserId) return;
     fetchThread(isInitialMount.current);
     isInitialMount.current = false;
-    const channel = supabase.channel(`verse-${verseId}`).on('postgres_changes', { event: '*', schema: 'public', table: 'comments', filter: `verse_id=eq.${verseId}` }, () => fetchThread(false)).on('postgres_changes', { event: '*', schema: 'public', table: 'likes' }, () => fetchThread(false)).subscribe();
+    
+    const channel = supabase.channel(`verse-${verseId}`)
+      .on('postgres_changes', { 
+        event: '*', 
+        schema: 'public', 
+        table: 'comments', 
+        filter: `verse_id=eq.${verseId}` 
+      }, () => fetchThread(false))
+      .subscribe();
+
     return () => { supabase.removeChannel(channel); };
-  }, [verseId, groupId, fetchThread]);
-
-  const toggleThread = (commentId: string) => {
-    setExpandedThreads(prev => {
-      const next = new Set(prev);
-      if (next.has(commentId)) next.delete(commentId);
-      else next.add(commentId);
-      return next;
-    });
-  };
-
-  const toggleResolvedView = (parentId: string) => {
-    setShowResolvedFor(prev => {
-      const next = new Set(prev);
-      if (next.has(parentId)) next.delete(parentId);
-      else next.add(parentId);
-      return next;
-    });
-  };
-
-  const handleDelete = async (commentId: string) => {
-    if (confirm('Delete this insight?')) {
-      await supabase.from('comments').delete().eq('id', commentId);
-      fetchThread(false);
-    }
-  };
-
-  const handleResolve = async (commentId: string, currentStatus: boolean) => {
-    await supabase.from('comments').update({ is_resolved: !currentStatus }).eq('id', commentId);
-    fetchThread(false);
-  };
-
-  const handleLike = async (comment: Comment) => {
-    if (!currentUserId) return; 
-    const isLiking = !comment.user_has_liked;
-    setComments(prev => prev.map(c => c.id === comment.id ? { ...c, user_has_liked: isLiking, likes_count: (c.likes_count || 0) + (isLiking ? 1 : -1) } : c));
-    try {
-      if (isLiking) await supabase.from('likes').insert({ comment_id: comment.id, user_id: currentUserId });
-      else await supabase.from('likes').delete().eq('comment_id', comment.id).eq('user_id', currentUserId);
-    } catch { fetchThread(false); }
-  };
+  }, [verseId, groupId, currentUserId, fetchThread]);
 
   const renderTree = (parentId: string | null = null, depth: number = 0) => {
     const allChildren = comments.filter(c => c.parent_id === parentId);
@@ -124,59 +124,84 @@ export const CommentThread = ({ verseId, groupId, referenceLabel }: CommentThrea
 
     if (visibleChildren.length === 0 && parentId !== null) return null;
 
-    const containerClass = parentId 
-      ? "mt-3" 
-      : "space-y-12 pt-6"; // Generous space between root commentary threads
+    const containerClass = parentId ? "mt-3" : "space-y-12 pt-6";
 
     return (
       <div className={containerClass}>
-        {visibleChildren.map((comment, index) => {
+        {visibleChildren.map((comment) => {
           const isExpanded = expandedThreads.has(comment.id);
           const isShowingResolved = showResolvedFor.has(comment.id);
           const activeChildCount = comments.filter(c => c.parent_id === comment.id && !c.is_resolved).length;
           const resolvedChildCount = comments.filter(c => c.parent_id === comment.id && c.is_resolved).length;
           const hasVisibleChildren = (activeChildCount > 0 && isExpanded) || (resolvedChildCount > 0 && isShowingResolved);
           
-          const isLastSibling = index === visibleChildren.length - 1;
-
           if (editingId === comment.id) {
             return (
               <div key={comment.id} className="my-4 p-2 bg-slate-50 dark:bg-slate-900 rounded-xl">
-                <AddCommentForm verseId={verseId} groupId={groupId} parentId={comment.parent_id} isEditMode={true} commentId={comment.id} initialContent={comment.content} onCancel={() => setEditingId(null)} onSuccess={() => { setEditingId(null); fetchThread(false); }} />
+                <AddCommentForm 
+                  verseId={verseId} 
+                  groupId={groupId} 
+                  parentId={comment.parent_id} 
+                  isEditMode={true} 
+                  commentId={comment.id} 
+                  initialContent={comment.content} 
+                  onCancel={() => setEditingId(null)} 
+                  onSuccess={() => { setEditingId(null); fetchThread(false); }} 
+                />
               </div>
             );
           }
 
           let replyingToName;
           if (depth > 0 && comment.parent_id) {
-            const parent = comments.find(c => c.id === comment.parent_id);
-            const p = Array.isArray(parent?.profiles) ? parent.profiles[0] : parent?.profiles;
-            replyingToName = p?.display_name || p?.username;
+            const parentComment = comments.find(c => c.id === comment.parent_id);
+            if (parentComment?.profiles) {
+              replyingToName = parentComment.profiles.display_name || parentComment.profiles.username;
+            }
           }
 
           return (
-            <div 
-              key={comment.id} 
-              className={`flex flex-col ${
-                !isLastSibling 
-                  ? (hasVisibleChildren ? 'mb-10' : 'mb-4') 
-                  : ''
-              }`}
-            >
+            <div key={comment.id} className="flex flex-col mb-4">
               <CommentItem 
-                comment={comment} 
+                comment={comment as unknown as Comment} 
                 currentUserId={currentUserId || undefined} 
                 replyingToName={replyingToName} 
                 onReplyClick={() => setReplyTo(replyTo === comment.id ? null : comment.id)} 
                 onEditClick={() => setEditingId(comment.id)} 
-                onDeleteClick={() => handleDelete(comment.id)} 
-                onResolveClick={() => handleResolve(comment.id, !!comment.is_resolved)} 
-                onLikeClick={() => handleLike(comment)} 
+                onDeleteClick={async () => {
+                  if (confirm('Delete this insight?')) {
+                    await supabase.from('comments').delete().eq('id', comment.id);
+                    fetchThread(false);
+                  }
+                }} 
+                onResolveClick={async () => {
+                  await supabase.from('comments').update({ is_resolved: !comment.is_resolved }).eq('id', comment.id);
+                  fetchThread(false);
+                }} 
+                onLikeClick={async () => {
+                  if (!currentUserId) return; 
+                  const isLiking = !comment.user_has_liked;
+                  try {
+                    if (isLiking) await supabase.from('likes').insert({ comment_id: comment.id, user_id: currentUserId });
+                    else await supabase.from('likes').delete().eq('comment_id', comment.id).eq('user_id', currentUserId);
+                    fetchThread(false);
+                  } catch { fetchThread(false); }
+                }} 
                 replyCount={activeChildCount} 
                 isExpanded={isExpanded} 
-                onToggleReplies={() => toggleThread(comment.id)} 
+                onToggleReplies={() => setExpandedThreads(prev => { 
+                  const n = new Set(prev); 
+                  if (n.has(comment.id)) n.delete(comment.id); 
+                  else n.add(comment.id); 
+                  return n; 
+                })} 
                 resolvedCount={resolvedChildCount} 
-                onToggleResolved={() => toggleResolvedView(comment.id)} 
+                onToggleResolved={() => setShowResolvedFor(prev => { 
+                  const n = new Set(prev); 
+                  if (n.has(comment.id)) n.delete(comment.id); 
+                  else n.add(comment.id); 
+                  return n; 
+                })} 
                 isResolvedExpanded={isShowingResolved} 
               />
               
@@ -184,7 +209,13 @@ export const CommentThread = ({ verseId, groupId, referenceLabel }: CommentThrea
                 <div className={depth < 2 ? "pl-3.5 ml-1 border-l border-slate-300 dark:border-slate-700" : "mt-2"}>
                   {replyTo === comment.id && (
                     <div className="mt-3 mb-4 px-1">
-                      <AddCommentForm verseId={verseId} groupId={groupId} parentId={comment.id} onCancel={() => setReplyTo(null)} onSuccess={() => { setReplyTo(null); if (!isExpanded) toggleThread(comment.id); fetchThread(false); }} />
+                      <AddCommentForm 
+                        verseId={verseId} 
+                        groupId={groupId} 
+                        parentId={comment.id} 
+                        onCancel={() => setReplyTo(null)} 
+                        onSuccess={() => { setReplyTo(null); fetchThread(false); }} 
+                      />
                     </div>
                   )}
                   {hasVisibleChildren && renderTree(comment.id, depth + 1)}
@@ -197,7 +228,7 @@ export const CommentThread = ({ verseId, groupId, referenceLabel }: CommentThrea
     );
   };
 
-  if (!verseId) return null;
+  if (verseId === undefined || verseId === null) return null;
 
   if (isLoading) {
     return (
@@ -205,7 +236,10 @@ export const CommentThread = ({ verseId, groupId, referenceLabel }: CommentThrea
         {[1, 2, 3].map(i => (
           <div key={i} className="flex gap-3 animate-pulse">
             <div className="w-5 h-5 bg-slate-100 dark:bg-slate-800 rounded-full" />
-            <div className="flex-1 space-y-2 pt-1"><div className="h-3 bg-slate-100 dark:bg-slate-800 rounded w-1/4" /><div className="h-12 bg-slate-50 dark:bg-slate-800/40 rounded w-full" /></div>
+            <div className="flex-1 space-y-2 pt-1">
+              <div className="h-3 bg-slate-100 dark:bg-slate-800 rounded w-1/4" />
+              <div className="h-12 bg-slate-50 dark:bg-slate-800/40 rounded w-full" />
+            </div>
           </div>
         ))}
       </div>

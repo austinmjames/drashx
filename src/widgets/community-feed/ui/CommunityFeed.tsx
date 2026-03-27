@@ -15,7 +15,12 @@ type FeedItem = {
   id: string;
   content: string;
   created_at: string;
-  profiles: { id: string; display_name: string | null; username: string; avatar_url: string | null };
+  profiles: { 
+    id: string; 
+    display_name: string | null; 
+    username: string; 
+    avatar_url: string | null 
+  };
   verses: {
     verse_number: number;
     text_en: string;
@@ -26,54 +31,109 @@ type FeedItem = {
   };
 };
 
+type RawBook = { name_en: string };
+type RawChapter = { chapter_number: number; books?: RawBook | RawBook[] | null };
+type RawVerse = { verse_number: number; text_en: string; chapters?: RawChapter | RawChapter[] | null };
+
+type RawFeedItem = {
+  id: string;
+  content: string;
+  created_at: string;
+  profiles?: FeedItem['profiles'] | FeedItem['profiles'][] | null;
+  verses?: RawVerse | RawVerse[] | null;
+};
+
 export const CommunityFeed = () => {
   const [feed, setFeed] = useState<FeedItem[]>([]);
   const [loading, setLoading] = useState(true);
   
-  // Capture the current time in state to maintain a pure render cycle
-  // We use a callback so it only evaluates once on mount.
   const [currentTime, setCurrentTime] = useState(() => Date.now());
 
   useEffect(() => {
     const fetchLatestComments = async () => {
-      // Fetch latest top-level comments with all necessary relational data
       const { data, error } = await supabase
         .from('comments')
         .select(`
-          id, content, created_at,
-          profiles (id, display_name, username, avatar_url),
-          verses (
-            verse_number, text_en,
-            chapters (
+          id, 
+          content, 
+          created_at,
+          profiles!user_id (
+            id, 
+            display_name, 
+            username, 
+            avatar_url
+          ),
+          verses!verse_id (
+            verse_number, 
+            text_en,
+            chapters!chapter_id (
               chapter_number,
-              books (name_en)
+              books!book_id (name_en)
             )
           )
         `)
-        .is('parent_id', null) // Only get top-level comments for the feed
+        .is('parent_id', null)
         .order('created_at', { ascending: false })
         .limit(20);
 
-      if (data && !error) {
-        setFeed(data as unknown as FeedItem[]);
+      if (error) {
+        console.error("Community Feed fetch failed:", error.message);
+        setLoading(false);
+        return;
+      }
+
+      if (data) {
+        const fullyNormalized = (data as RawFeedItem[]).map((item): FeedItem => {
+          const profile = (Array.isArray(item.profiles) ? item.profiles[0] : item.profiles) || {
+            id: '', display_name: 'Anonymous', username: 'anonymous', avatar_url: null
+          };
+          
+          const verse = Array.isArray(item.verses) ? item.verses[0] : item.verses;
+          const chapter = verse && verse.chapters 
+            ? (Array.isArray(verse.chapters) ? verse.chapters[0] : verse.chapters) 
+            : null;
+          const book = chapter && chapter.books 
+            ? (Array.isArray(chapter.books) ? chapter.books[0] : chapter.books) 
+            : null;
+
+          return {
+            id: item.id,
+            content: item.content,
+            created_at: item.created_at,
+            profiles: profile,
+            verses: {
+              verse_number: verse?.verse_number || 0,
+              text_en: verse?.text_en || '',
+              chapters: {
+                chapter_number: chapter?.chapter_number || 0,
+                books: {
+                  name_en: book?.name_en || 'Unknown Book'
+                }
+              }
+            }
+          };
+        });
+
+        setFeed(fullyNormalized);
       }
       setLoading(false);
     };
 
     fetchLatestComments();
     
-    // Optional: Update the "current time" every minute so relative dates stay fresh
-    // without violating React's pure render rules.
     const interval = setInterval(() => setCurrentTime(Date.now()), 60000);
     return () => clearInterval(interval);
   }, []);
 
   const formatDate = (dateStr: string) => {
     const date = new Date(dateStr);
-    return new Intl.RelativeTimeFormat('en', { numeric: 'auto' }).format(
-      Math.ceil((date.getTime() - currentTime) / (1000 * 60 * 60 * 24)),
-      'day'
-    );
+    const diffDays = Math.ceil((date.getTime() - currentTime) / (1000 * 60 * 60 * 24));
+    
+    try {
+      return new Intl.RelativeTimeFormat('en', { numeric: 'auto' }).format(diffDays, 'day');
+    } catch {
+      return date.toLocaleDateString();
+    }
   };
 
   if (loading) {
@@ -97,19 +157,17 @@ export const CommunityFeed = () => {
   return (
     <div className="space-y-6">
       {feed.map((item) => {
-        const bookName = item.verses.chapters.books.name_en;
-        const chapterNum = item.verses.chapters.chapter_number;
-        const verseNum = item.verses.verse_number;
+        const bookName = item.verses?.chapters?.books?.name_en || 'Unknown Book';
+        const chapterNum = item.verses?.chapters?.chapter_number || 0;
+        const verseNum = item.verses?.verse_number || 0;
         
         return (
           <div key={item.id} className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm overflow-hidden transition-shadow hover:shadow-md group">
-            
-            {/* Context Header (The Verse) */}
             <div className="bg-slate-50 dark:bg-slate-900/50 p-4 border-b border-slate-100 dark:border-slate-800 flex items-start gap-3">
               <Quote className="w-5 h-5 text-indigo-300 shrink-0 mt-0.5" />
               <div className="flex-1 min-w-0">
                 <p className="text-sm font-medium text-slate-800 dark:text-slate-200 line-clamp-2">
-                  {item.verses.text_en}
+                  {item.verses?.text_en || 'Text not available'}
                 </p>
                 <div className="flex items-center gap-2 mt-2">
                   <span className="text-xs font-bold uppercase tracking-wider text-indigo-600 dark:text-indigo-400">
@@ -126,14 +184,13 @@ export const CommunityFeed = () => {
               </Link>
             </div>
 
-            {/* Commentary Body */}
             <div className="p-5 flex gap-4">
               <UserAvatar 
                 profile={{
-                  id: item.profiles.id,
-                  username: item.profiles.username,
-                  display_name: item.profiles.display_name || undefined,
-                  avatar_url: item.profiles.avatar_url || undefined
+                  id: item.profiles?.id || '',
+                  username: item.profiles?.username || 'anonymous',
+                  display_name: item.profiles?.display_name || undefined,
+                  avatar_url: item.profiles?.avatar_url || undefined
                 }} 
                 size="md" 
               />
@@ -147,9 +204,10 @@ export const CommunityFeed = () => {
                     {formatDate(item.created_at)}
                   </span>
                 </div>
-                <p className="text-slate-700 dark:text-slate-300 text-sm leading-relaxed whitespace-pre-wrap">
-                  {item.content}
-                </p>
+                <div 
+                  className="text-slate-700 dark:text-slate-300 text-sm leading-relaxed whitespace-pre-wrap"
+                  dangerouslySetInnerHTML={{ __html: item.content }}
+                />
               </div>
             </div>
             
