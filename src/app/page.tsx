@@ -10,6 +10,12 @@ import { supabase } from '../shared/api/supabase';
 import { HomePage } from '../pages/home/ui/HomePage';
 import { ReaderPage } from '../pages/reader/ui/ReaderPage';
 
+// Define the expected structure of the database response to satisfy TypeScript
+interface ProfileData {
+  last_book?: string;
+  last_chapter?: number;
+}
+
 export default function RootPage() {
   const [session, setSession] = useState<Session | null>(null);
   const [isLoading, setIsLoading] = useState(true);
@@ -23,6 +29,31 @@ export default function RootPage() {
       setIsLoading(false);
       return;
     }
+
+    // Fetch the reading location from the profile table
+    // Moved inside the useEffect to resolve the Next.js exhaustive-deps build error
+    const fetchLastPosition = async (userId: string) => {
+      try {
+        const { data, error } = await supabase
+          .from('profiles')
+          .select('last_book, last_chapter')
+          .eq('id', userId)
+          .single();
+
+        if (error) throw error;
+
+        if (data) {
+          // Cast the response to our specific interface to prevent TS build errors
+          const profile = data as ProfileData;
+          if (profile.last_book) setLastBook(profile.last_book);
+          if (profile.last_chapter) setLastChapter(profile.last_chapter);
+        }
+      } catch (e) {
+        console.error("Error fetching last reading position:", e);
+      } finally {
+        setIsLoading(false);
+      }
+    };
 
     // 1. Initial Session Check
     supabase.auth.getSession().then(({ data: { session } }) => {
@@ -45,29 +76,7 @@ export default function RootPage() {
     });
 
     return () => subscription.unsubscribe();
-  }, []);
-
-  // Fetch the reading location from the profile table
-  const fetchLastPosition = async (userId: string) => {
-    try {
-      const { data, error } = await supabase
-        .from('profiles')
-        .select('last_book, last_chapter')
-        .eq('id', userId)
-        .single();
-
-      if (error) throw error;
-
-      if (data) {
-        if (data.last_book) setLastBook(data.last_book);
-        if (data.last_chapter) setLastChapter(data.last_chapter);
-      }
-    } catch (e) {
-      console.error("Error fetching last reading position:", e);
-    } finally {
-      setIsLoading(false);
-    }
-  };
+  }, []); // Empty dependency array is now completely safe and strictly valid
 
   // Show a premium loading state while verifying auth
   if (isLoading) {
