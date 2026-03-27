@@ -1,7 +1,7 @@
 // Path: src/widgets/comment-threads/ui/CommentThread.tsx
 import React, { useEffect, useState, useCallback, useRef } from 'react';
 import { supabase } from '../../../shared/api/supabase';
-import { CommentItem, Comment, ProfileData } from '../../../entities/comment/ui/CommentItem';
+import { CommentItem, Comment } from '../../../entities/comment/ui/CommentItem';
 import { AddCommentForm } from '../../../features/comments/add-comment/ui/AddCommentForm';
 
 interface CommentThreadProps {
@@ -10,13 +10,10 @@ interface CommentThreadProps {
   referenceLabel?: string; 
 }
 
-/**
- * Interface representing the raw data returned from Supabase 
- * including the joined tables.
- */
-interface SupabaseComment extends Comment {
-  likes: { user_id: string }[] | null;
-}
+type RawComment = {
+  likes?: { user_id: string }[];
+  [key: string]: unknown;
+};
 
 export const CommentThread = ({ verseId, groupId, referenceLabel }: CommentThreadProps) => {
   const [comments, setComments] = useState<Comment[]>([]);
@@ -49,7 +46,7 @@ export const CommentThread = ({ verseId, groupId, referenceLabel }: CommentThrea
       .select(`
         *,
         profiles:user_id ( username, display_name, avatar_url ),
-        likes:comment_likes ( user_id )
+        likes ( user_id )
       `)
       .eq('verse_id', verseId)
       .order('created_at', { ascending: true });
@@ -60,12 +57,12 @@ export const CommentThread = ({ verseId, groupId, referenceLabel }: CommentThrea
     const { data, error } = await query;
 
     if (!error && data) {
-      const formattedComments = (data as SupabaseComment[]).map((c) => ({
+      const formattedComments = data.map((c: RawComment) => ({
         ...c,
         likes_count: c.likes?.length || 0,
-        user_has_liked: c.likes?.some((l) => l.user_id === currentUserId) || false
+        user_has_liked: c.likes?.some(l => l.user_id === currentUserId) || false
       }));
-      setComments(formattedComments as Comment[]);
+      setComments(formattedComments as unknown as Comment[]);
     }
     setIsLoading(false);
   }, [verseId, groupId, currentUserId]);
@@ -74,22 +71,7 @@ export const CommentThread = ({ verseId, groupId, referenceLabel }: CommentThrea
     if (!verseId) return;
     fetchThread(isInitialMount.current);
     isInitialMount.current = false;
-
-    // Fixed Real-time table names to match your schema
-    const channel = supabase.channel(`verse-${verseId}`)
-      .on('postgres_changes', { 
-        event: '*', 
-        schema: 'public', 
-        table: 'comments', 
-        filter: `verse_id=eq.${verseId}` 
-      }, () => fetchThread(false))
-      .on('postgres_changes', { 
-        event: '*', 
-        schema: 'public', 
-        table: 'comment_likes' 
-      }, () => fetchThread(false))
-      .subscribe();
-
+    const channel = supabase.channel(`verse-${verseId}`).on('postgres_changes', { event: '*', schema: 'public', table: 'comments', filter: `verse_id=eq.${verseId}` }, () => fetchThread(false)).on('postgres_changes', { event: '*', schema: 'public', table: 'likes' }, () => fetchThread(false)).subscribe();
     return () => { supabase.removeChannel(channel); };
   }, [verseId, groupId, fetchThread]);
 
@@ -126,19 +108,11 @@ export const CommentThread = ({ verseId, groupId, referenceLabel }: CommentThrea
   const handleLike = async (comment: Comment) => {
     if (!currentUserId) return; 
     const isLiking = !comment.user_has_liked;
-    
-    // Optimistic Update
     setComments(prev => prev.map(c => c.id === comment.id ? { ...c, user_has_liked: isLiking, likes_count: (c.likes_count || 0) + (isLiking ? 1 : -1) } : c));
-    
     try {
-      if (isLiking) {
-        await supabase.from('comment_likes').insert({ comment_id: comment.id, user_id: currentUserId });
-      } else {
-        await supabase.from('comment_likes').delete().eq('comment_id', comment.id).eq('user_id', currentUserId);
-      }
-    } catch { 
-      fetchThread(false); 
-    }
+      if (isLiking) await supabase.from('likes').insert({ comment_id: comment.id, user_id: currentUserId });
+      else await supabase.from('likes').delete().eq('comment_id', comment.id).eq('user_id', currentUserId);
+    } catch { fetchThread(false); }
   };
 
   const renderTree = (parentId: string | null = null, depth: number = 0) => {
@@ -150,8 +124,12 @@ export const CommentThread = ({ verseId, groupId, referenceLabel }: CommentThrea
 
     if (visibleChildren.length === 0 && parentId !== null) return null;
 
+    const containerClass = parentId 
+      ? "mt-3" 
+      : "space-y-12 pt-6"; // Generous space between root commentary threads
+
     return (
-      <div className={parentId ? "mt-3" : "space-y-12 pt-6"}>
+      <div className={containerClass}>
         {visibleChildren.map((comment, index) => {
           const isExpanded = expandedThreads.has(comment.id);
           const isShowingResolved = showResolvedFor.has(comment.id);
@@ -159,6 +137,8 @@ export const CommentThread = ({ verseId, groupId, referenceLabel }: CommentThrea
           const resolvedChildCount = comments.filter(c => c.parent_id === comment.id && c.is_resolved).length;
           const hasVisibleChildren = (activeChildCount > 0 && isExpanded) || (resolvedChildCount > 0 && isShowingResolved);
           
+          const isLastSibling = index === visibleChildren.length - 1;
+
           if (editingId === comment.id) {
             return (
               <div key={comment.id} className="my-4 p-2 bg-slate-50 dark:bg-slate-900 rounded-xl">
@@ -170,12 +150,19 @@ export const CommentThread = ({ verseId, groupId, referenceLabel }: CommentThrea
           let replyingToName;
           if (depth > 0 && comment.parent_id) {
             const parent = comments.find(c => c.id === comment.parent_id);
-            const profile = Array.isArray(parent?.profiles) ? parent.profiles[0] : (parent?.profiles as ProfileData | undefined);
-            replyingToName = profile?.display_name || profile?.username;
+            const p = Array.isArray(parent?.profiles) ? parent.profiles[0] : parent?.profiles;
+            replyingToName = p?.display_name || p?.username;
           }
 
           return (
-            <div key={comment.id} className={`flex flex-col ${!index && index !== visibleChildren.length - 1 ? (hasVisibleChildren ? 'mb-10' : 'mb-4') : ''}`}>
+            <div 
+              key={comment.id} 
+              className={`flex flex-col ${
+                !isLastSibling 
+                  ? (hasVisibleChildren ? 'mb-10' : 'mb-4') 
+                  : ''
+              }`}
+            >
               <CommentItem 
                 comment={comment} 
                 currentUserId={currentUserId || undefined} 
@@ -216,9 +203,9 @@ export const CommentThread = ({ verseId, groupId, referenceLabel }: CommentThrea
     return (
       <div className="space-y-6 pt-4 px-2">
         {[1, 2, 3].map(i => (
-          <div key={i} className="flex gap-3 animate-pulse opacity-50">
-            <div className="w-5 h-5 bg-slate-200 dark:bg-slate-800 rounded-full" />
-            <div className="flex-1 space-y-2 pt-1"><div className="h-3 bg-slate-200 dark:bg-slate-800 rounded w-1/4" /><div className="h-12 bg-slate-100 dark:bg-slate-800 rounded w-full" /></div>
+          <div key={i} className="flex gap-3 animate-pulse">
+            <div className="w-5 h-5 bg-slate-100 dark:bg-slate-800 rounded-full" />
+            <div className="flex-1 space-y-2 pt-1"><div className="h-3 bg-slate-100 dark:bg-slate-800 rounded w-1/4" /><div className="h-12 bg-slate-50 dark:bg-slate-800/40 rounded w-full" /></div>
           </div>
         ))}
       </div>
