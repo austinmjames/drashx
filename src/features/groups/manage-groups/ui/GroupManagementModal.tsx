@@ -41,7 +41,7 @@ export const GroupManagementModal = ({
   onGroupsChange,
   onGroupCreated 
 }: GroupManagementModalProps) => {
-  const [mode, setMode] = useState<ModalMode>('create');
+  const [mode, setMode] = useState<ModalMode>('manage');
   const [managingGroup, setManagingGroup] = useState<GroupMemberData | null>(null);
   const [myGroups, setMyGroups] = useState<GroupMemberData[]>([]);
   const [isLoadingGroups, setIsLoadingGroups] = useState(true);
@@ -49,7 +49,6 @@ export const GroupManagementModal = ({
 
   /**
    * Fetches groups where the current user is a member.
-   * This is the source of truth for the 'Manage' tab list.
    */
   const fetchMyGroups = useCallback(async () => {
     if (!userId) return;
@@ -66,7 +65,7 @@ export const GroupManagementModal = ({
       const formattedData = (data as unknown as GroupMemberData[]) || [];
       setMyGroups(formattedData);
       
-      // Crucial: Update the main Reader UI (GroupSelector, etc.)
+      // Update the main Reader UI
       if (onGroupsChange) onGroupsChange();
     } catch (err) {
       console.error("Error fetching groups:", err);
@@ -75,12 +74,12 @@ export const GroupManagementModal = ({
     }
   }, [userId, onGroupsChange]);
 
-  // Trigger fetch whenever the modal opens or switches to 'manage' mode
+  // Sync data when modal opens or shifts to manage mode
   useEffect(() => {
-    if (isOpen && mode === 'manage' && !managingGroup) {
+    if (isOpen) {
       fetchMyGroups();
     }
-  }, [isOpen, mode, managingGroup, fetchMyGroups]);
+  }, [isOpen, fetchMyGroups]);
 
   const handleSuccess = (groupId: string) => {
     fetchMyGroups(); 
@@ -90,7 +89,6 @@ export const GroupManagementModal = ({
 
   /**
    * Handles the UI transition back to the group list.
-   * We force a fetch here to ensure any 'Leave' actions are reflected.
    */
   const handleReturnFromManage = () => {
     setManagingGroup(null);
@@ -100,18 +98,20 @@ export const GroupManagementModal = ({
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 z-100 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-sm animate-in fade-in duration-200">
-      <div className="bg-white dark:bg-slate-950 w-full max-w-lg rounded-2xl shadow-2xl flex flex-col max-h-[90vh] overflow-hidden animate-in zoom-in-95 duration-200 border border-slate-100 dark:border-slate-800">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-in fade-in duration-200">
+      <div className="bg-white dark:bg-slate-950 w-full max-w-lg rounded-3xl shadow-2xl flex flex-col h-[80vh] overflow-hidden animate-in zoom-in-95 duration-200 border border-slate-100 dark:border-slate-800">
         
         {/* Modal Header */}
         <div className="px-6 py-5 flex items-center justify-between border-b border-slate-50 dark:border-slate-900">
           {!managingGroup ? (
-            <h2 className="text-lg font-bold text-slate-900 dark:text-white tracking-tight">Community Groups</h2>
+            <div>
+              <h2 className="text-lg font-black text-slate-900 dark:text-white tracking-tight">Communities</h2>
+              <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Collaborative Learning</p>
+            </div>
           ) : (
             <button 
               onClick={handleReturnFromManage} 
               title="Return to group list" 
-              aria-label="Back"
               className="flex items-center gap-2 text-sm font-bold text-slate-500 hover:text-indigo-600 transition-colors"
             >
               <ArrowLeft size={16} /> Back
@@ -119,9 +119,8 @@ export const GroupManagementModal = ({
           )}
           <button 
             onClick={onClose} 
-            title="Close modal" 
-            aria-label="Close"
-            className="p-1 rounded-full hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-400 transition-colors"
+            title="Close modal"
+            className="p-2 rounded-full hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-400 transition-colors"
           >
             <X size={20} />
           </button>
@@ -141,13 +140,9 @@ export const GroupManagementModal = ({
               {(['create', 'join', 'discover', 'manage'] as const).map((m) => (
                 <button
                   key={m}
-                  onClick={() => {
-                    setMode(m);
-                    if (m === 'manage') setIsLoadingGroups(true);
-                  }}
-                  title={`Switch to ${m} tab`}
-                  aria-label={`Switch to ${m} tab`}
-                  className={`py-3 text-[11px] font-black uppercase tracking-widest transition-all border-b-2 ${
+                  onClick={() => setMode(m)}
+                  title={`Switch to ${m} view`}
+                  className={`py-3 text-[10px] font-black uppercase tracking-widest transition-all border-b-2 ${
                     mode === m ? 'border-indigo-600 text-indigo-600' : 'border-transparent text-slate-400 hover:text-slate-600'
                   }`}
                 >
@@ -160,57 +155,57 @@ export const GroupManagementModal = ({
             <div className="flex-1 overflow-y-auto px-6 py-8 scrollbar-hide">
               {mode === 'create' && <CreateGroupView userId={userId} onSuccess={handleSuccess} />}
               {mode === 'join' && <JoinGroupView userId={userId} onSuccess={handleSuccess} />}
-              {mode === 'discover' && <DiscoverGroupsView />}
+              {mode === 'discover' && <DiscoverGroupsView userId={userId} onSuccess={handleSuccess} />}
               {mode === 'manage' && (
                 <div className="space-y-4 animate-in fade-in duration-300">
                   {isLoadingGroups ? (
-                    <div className="py-12 flex flex-col items-center gap-3 text-slate-400">
+                    <div className="py-20 flex flex-col items-center gap-3 text-slate-400">
                       <Loader2 className="animate-spin text-indigo-500" size={24} />
-                      <p className="text-xs font-medium">Syncing groups...</p>
+                      <p className="text-xs font-bold uppercase tracking-widest">Syncing groups...</p>
                     </div>
                   ) : myGroups.length === 0 ? (
-                    <div className="text-center py-12 space-y-3">
-                      <div className="w-12 h-12 bg-slate-100 dark:bg-slate-900 rounded-full flex items-center justify-center mx-auto text-slate-400">
-                        <Book size={20}/>
+                    <div className="text-center py-20 space-y-4">
+                      <div className="w-16 h-16 bg-slate-50 dark:bg-slate-900 rounded-3xl flex items-center justify-center mx-auto text-slate-200">
+                        <Book size={32}/>
                       </div>
                       <div>
-                        <p className="text-sm font-bold text-slate-500">No active groups.</p>
-                        <button onClick={() => setMode('discover')} className="text-xs text-indigo-600 font-bold hover:underline">Find a community</button>
+                        <p className="text-sm font-bold text-slate-400">You aren&rsquo;t in any groups yet.</p>
+                        <button onClick={() => setMode('discover')} title="Discover communities" className="text-xs text-indigo-600 font-bold hover:underline mt-1">Discover communities</button>
                       </div>
                     </div>
                   ) : (
-                    <div className="space-y-2">
+                    <div className="grid gap-2">
                       {myGroups.map(mg => {
                         const isHovered = hoveredGroupId === mg.groups.id;
                         const GroupIcon = ICON_OPTIONS.find(o => o.id === mg.groups.icon_url)?.icon || Book;
                         const ThemeColor = COLOR_OPTIONS.find(o => o.id === mg.groups.color_theme) || COLOR_OPTIONS[0];
 
                         return (
-                          <div 
+                          <button 
                             key={mg.groups.id} 
                             onClick={() => setManagingGroup(mg)} 
                             onMouseEnter={() => setHoveredGroupId(mg.groups.id)}
                             onMouseLeave={() => setHoveredGroupId(null)}
-                            className={`p-3 rounded-xl transition-all cursor-pointer border flex items-center justify-between ${
+                            title={`Manage ${mg.groups.name}`}
+                            className={`p-4 rounded-2xl transition-all cursor-pointer border flex items-center justify-between text-left w-full ${
                               isHovered 
-                                ? 'bg-slate-50 dark:bg-slate-900/50 border-slate-200 dark:border-slate-800 translate-x-1' 
-                                : 'bg-white dark:bg-slate-950 border-transparent'
+                                ? 'bg-white dark:bg-slate-900 shadow-xl border-slate-200 dark:border-slate-800 -translate-y-0.5' 
+                                : 'bg-slate-50 dark:bg-slate-900/40 border-slate-100 dark:border-slate-800'
                             }`}
                           >
                             <div className="flex items-center gap-4">
-                              {/* White-on-Color branding for group avatars */}
-                              <div className={`w-10 h-10 rounded-full flex items-center justify-center text-white shadow-sm transition-all ${ThemeColor.hex}`}>
-                                <GroupIcon size={18} />
+                              <div className={`w-10 h-10 rounded-xl flex items-center justify-center text-white shadow-sm transition-all ${ThemeColor.hex}`}>
+                                <GroupIcon size={20} />
                               </div>
                               <div>
-                                <h4 className={`font-bold text-sm transition-colors ${isHovered ? 'text-indigo-600' : 'text-slate-900 dark:text-white'}`}>
+                                <h4 className={`font-black text-sm transition-colors ${isHovered ? ThemeColor.text : 'text-slate-900 dark:text-white'}`}>
                                   {mg.groups.name}
                                 </h4>
                                 <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest mt-0.5">{mg.role}</p>
                               </div>
                             </div>
-                            <Settings className={`text-slate-300 transition-all ${isHovered ? 'rotate-90 opacity-100' : 'opacity-0'}`} size={16} />
-                          </div>
+                            <Settings className={`text-slate-300 transition-all ${isHovered ? 'rotate-90 text-indigo-500' : 'opacity-0'}`} size={16} />
+                          </button>
                         );
                       })}
                     </div>
