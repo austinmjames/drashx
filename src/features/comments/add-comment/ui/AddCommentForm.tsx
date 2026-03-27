@@ -85,10 +85,13 @@ export const AddCommentForm = ({
         throw new Error("You must be logged in to post an insight.");
       }
 
+      // FIX: Force content to be a pure string to prevent [object Object] leaks into the DB
+      const safeContent = typeof content === 'string' ? content : String(content);
+
       if (isEditMode && commentId) {
         const { error: updateError } = await supabase
           .from('comments')
-          .update({ content, is_edited: true })
+          .update({ content: safeContent, is_edited: true })
           .eq('id', commentId);
           
         if (updateError) throw updateError;
@@ -97,7 +100,7 @@ export const AddCommentForm = ({
           .from('comments')
           .insert([
             { 
-              content, 
+              content: safeContent, 
               verse_id: verseId, 
               group_id: groupId || null, 
               parent_id: parentId,
