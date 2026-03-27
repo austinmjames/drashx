@@ -6,9 +6,9 @@ import { Loader2 } from 'lucide-react';
 import { Session } from '@supabase/supabase-js';
 import { supabase } from '../shared/api/supabase';
 
-// Import our core page features
-import { HomePage } from '../pages/home/ui/HomePage';
-import { ReaderPage } from '../pages/reader/ui/ReaderPage';
+// Import our core page features from 'views' instead of 'pages' to avoid Next.js routing conflicts
+import { HomePage } from '../views/home/ui/HomePage';
+import { ReaderPage } from '../views/reader/ui/ReaderPage';
 
 // Define the expected structure of the database response to satisfy TypeScript
 interface ProfileData {
@@ -31,7 +31,6 @@ export default function RootPage() {
     }
 
     // Fetch the reading location from the profile table
-    // Moved inside the useEffect to resolve the Next.js exhaustive-deps build error
     const fetchLastPosition = async (userId: string) => {
       try {
         const { data, error } = await supabase

@@ -1,5 +1,5 @@
 import React from 'react';
-import { ReaderPage } from '../../../../pages/reader/ui/ReaderPage';
+import { ReaderPage } from '../../../../views/reader/ui/ReaderPage';
 
 /**
  * Dynamic App Router Page
