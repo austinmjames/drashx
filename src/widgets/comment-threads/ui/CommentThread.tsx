@@ -1,3 +1,4 @@
+// Path: src/widgets/comment-threads/ui/CommentThread.tsx
 import React, { useEffect, useState, useCallback, useRef } from 'react';
 import { supabase } from '../../../shared/api/supabase';
 import { CommentItem, Comment } from '../../../entities/comment/ui/CommentItem';
@@ -51,6 +52,9 @@ export const CommentThread = ({ verseId, groupId, referenceLabel, currentUserId:
     // Determine context: Personal mode (groupId === currentUserId) or Group mode
     const isPersonal = groupId === currentUserId;
 
+    // FIX: Strictly parse the verseId to an integer to match your database schema
+    const numericVerseId = typeof verseId === 'string' ? parseInt(verseId, 10) : verseId;
+
     /**
      * CRITICAL FIX: DISAMBIGUATION
      * ---------------------------
@@ -68,7 +72,7 @@ export const CommentThread = ({ verseId, groupId, referenceLabel, currentUserId:
         ),
         likes:likes!comment_id ( user_id )
       `)
-      .eq('verse_id', verseId)
+      .eq('verse_id', numericVerseId)
       .order('created_at', { ascending: true });
 
     if (isPersonal) {
@@ -89,6 +93,8 @@ export const CommentThread = ({ verseId, groupId, referenceLabel, currentUserId:
     } else if (data) {
       const formattedComments = data.map((c) => ({
         ...c,
+        // FIX: Ensure profiles array is normalized so it never causes [object Object] bugs
+        profiles: Array.isArray(c.profiles) ? c.profiles[0] : c.profiles,
         likes_count: c.likes?.length || 0,
         user_has_liked: c.likes?.some((l: { user_id: string }) => l.user_id === currentUserId) || false
       }));
@@ -103,12 +109,15 @@ export const CommentThread = ({ verseId, groupId, referenceLabel, currentUserId:
     fetchThread(isInitialMount.current);
     isInitialMount.current = false;
     
-    const channel = supabase.channel(`verse-${verseId}`)
+    // FIX: Cast verseId to integer here as well so the Realtime filter successfully matches the DB column
+    const numericVerseId = typeof verseId === 'string' ? parseInt(verseId, 10) : verseId;
+
+    const channel = supabase.channel(`verse-${numericVerseId}`)
       .on('postgres_changes', { 
         event: '*', 
         schema: 'public', 
         table: 'comments', 
-        filter: `verse_id=eq.${verseId}` 
+        filter: `verse_id=eq.${numericVerseId}` 
       }, () => fetchThread(false))
       .subscribe();
 

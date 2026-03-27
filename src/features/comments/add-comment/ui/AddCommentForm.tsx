@@ -51,14 +51,15 @@ export const AddCommentForm = ({
   const checkFormats = () => {
     if (typeof document !== 'undefined') {
       const fontSize = document.queryCommandValue('fontSize');
-      setFormats({
+      setFormats(prev => ({
+        ...prev,
         bold: document.queryCommandState('bold'),
         italic: document.queryCommandState('italic'),
         underline: document.queryCommandState('underline'),
         highlight: document.queryCommandValue('backColor') === 'rgb(254, 240, 138)' || document.queryCommandValue('hiliteColor') === 'rgb(254, 240, 138)',
-        small: fontSize === '2',
-        large: fontSize === '5'
-      });
+        small: fontSize === '2', // -2pt
+        large: fontSize === '4'  // +2pt
+      }));
     }
   };
 
@@ -85,14 +86,22 @@ export const AddCommentForm = ({
         throw new Error("You must be logged in to post an insight.");
       }
 
-      // FIX: Force content to be a pure string to prevent [object Object] leaks into the DB
       const safeContent = typeof content === 'string' ? content : String(content);
+      
+      // PREVENT FOREIGN KEY CRASH: If groupId matches user.id (Personal Mode), set group_id to null
+      const finalGroupId = groupId === session.user.id ? null : (groupId || null);
+
+      // ENFORCE INTEGER: The database comments table expects an integer for verse_id
+      const finalVerseId = typeof verseId === 'string' ? parseInt(verseId, 10) : verseId;
+      
+      // PARENT ID MUST BE STRING (UUID)
+      const finalParentId = parentId ? String(parentId) : null;
 
       if (isEditMode && commentId) {
         const { error: updateError } = await supabase
           .from('comments')
           .update({ content: safeContent, is_edited: true })
-          .eq('id', commentId);
+          .eq('id', String(commentId));
           
         if (updateError) throw updateError;
       } else {
@@ -101,9 +110,9 @@ export const AddCommentForm = ({
           .insert([
             { 
               content: safeContent, 
-              verse_id: verseId, 
-              group_id: groupId || null, 
-              parent_id: parentId,
+              verse_id: finalVerseId, 
+              group_id: finalGroupId, 
+              parent_id: finalParentId,
               user_id: session.user.id 
             }
           ]);
@@ -117,8 +126,14 @@ export const AddCommentForm = ({
       }
       if (onSuccess) onSuccess();
     } catch (err: unknown) {
-      if (err instanceof Error) setError(err.message);
-      else setError(String(err));
+      console.error("Supabase Submit Error:", err);
+      if (err !== null && typeof err === 'object' && 'message' in err) {
+        setError(String(err.message));
+      } else if (err instanceof Error) {
+        setError(err.message);
+      } else {
+        setError(typeof err === 'string' ? err : JSON.stringify(err));
+      }
     } finally {
       setIsSubmitting(false);
     }
@@ -138,9 +153,17 @@ export const AddCommentForm = ({
     applyFormat('hiliteColor', isHighlighted ? 'transparent' : '#fef08a');
   };
 
-  const toggleSize = (size: '2' | '5') => {
-    const currentSize = document.queryCommandValue('fontSize');
-    applyFormat('fontSize', currentSize === size ? '3' : size);
+  // FIX: Using HTML Font Size scale 2 (~10pt) and 4 (~14pt) for accurate +/- 2pt relative scaling from the base 3 (~12pt).
+  const toggleSize = (size: '2' | '4') => {
+    const isCurrentlyActive = (size === '2' && formats.small) || (size === '4' && formats.large);
+    
+    if (isCurrentlyActive) {
+      applyFormat('fontSize', '3'); // Back to default 12pt
+      setFormats(prev => ({ ...prev, small: false, large: false }));
+    } else {
+      applyFormat('fontSize', size);
+      setFormats(prev => ({ ...prev, small: size === '2', large: size === '4' }));
+    }
   };
 
   const handlePaste = (e: React.ClipboardEvent) => {
@@ -166,7 +189,7 @@ export const AddCommentForm = ({
         fullHeight ? 'h-full w-full' : 'rounded-2xl border border-slate-200 dark:border-slate-800'
       }`}
     >
-      {/* Tighter Formatting Toolbar (Now includes Close and Reference) */}
+      {/* Tighter Formatting Toolbar */}
       <div className={`flex items-center justify-between p-1 border-b border-slate-100 dark:border-slate-800 ${fullHeight ? 'px-6 py-3 bg-slate-50/50' : 'px-2 bg-white dark:bg-slate-900'}`}>
         <div className="flex items-center gap-0.5">
           <button
@@ -219,7 +242,7 @@ export const AddCommentForm = ({
 
           <button
             type="button"
-            onMouseDown={(e) => { e.preventDefault(); toggleSize('5'); }}
+            onMouseDown={(e) => { e.preventDefault(); toggleSize('4'); }}
             className={`p-1.5 rounded transition-colors ${formats.large ? 'bg-indigo-100 text-indigo-700' : 'hover:bg-slate-100 text-slate-500'}`}
             title="Large Text"
           >
@@ -250,7 +273,7 @@ export const AddCommentForm = ({
       </div>
 
       {error && (
-        <div className="px-4 py-2 bg-red-50 text-red-600 text-[11px] font-medium border-b border-red-100">
+        <div className="px-4 py-2 bg-red-50 text-red-600 text-[11px] font-medium border-b border-red-100 wrap-break-word">
           {error}
         </div>
       )}
