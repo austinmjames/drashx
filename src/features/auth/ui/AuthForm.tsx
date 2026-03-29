@@ -14,6 +14,7 @@ export const AuthForm = () => {
 
   // Sign Up State
   const [email, setEmail] = useState('');
+  const [displayName, setDisplayName] = useState('');
   const [username, setUsername] = useState('');
   const [signupPassword, setSignupPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
@@ -26,6 +27,7 @@ export const AuthForm = () => {
     try {
       if (isSignUp) {
         // --- SIGN UP LOGIC ---
+        if (!displayName.trim()) throw new Error("Display name is required.");
         if (signupPassword !== confirmPassword) throw new Error("Passwords do not match.");
         if (signupPassword.length < 6) throw new Error("Password must be at least 6 characters.");
         if (!/^[a-zA-Z0-9_]+$/.test(username)) throw new Error("Username can only contain letters, numbers, and underscores.");
@@ -38,22 +40,27 @@ export const AuthForm = () => {
           options: {
             data: {
               username: cleanUsername,
-              display_name: cleanUsername
+              display_name: displayName.trim()
             }
           }
         });
 
         if (error) throw error;
         
-        // Fallback: Manually update profile if auto-confirm is enabled and a session is returned immediately
+        // Fallback: Manually upsert profile to guarantee the row is created with the exact schema mapping
         if (data?.user) {
-          await supabase.from('profiles').update({ username: cleanUsername }).eq('id', data.user.id);
+          await supabase.from('profiles').upsert({ 
+            id: data.user.id,
+            username: cleanUsername,
+            display_name: displayName.trim()
+          }, { onConflict: 'id' });
         }
 
         setMessage({ type: 'success', text: 'Registration successful! Check your email to verify your account.' });
         
         // Clear signup fields
         setEmail('');
+        setDisplayName('');
         setUsername('');
         setSignupPassword('');
         setConfirmPassword('');
@@ -124,6 +131,23 @@ export const AuthForm = () => {
                   onChange={(e) => setEmail(e.target.value)}
                   className="w-full pl-10 pr-4 py-3 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950 focus:ring-2 focus:ring-indigo-500 outline-none transition-all text-sm font-medium"
                   placeholder="you@example.com"
+                />
+              </div>
+            </div>
+
+            <div className="space-y-1">
+              <label className="text-[10px] font-bold uppercase tracking-widest text-slate-400 ml-1">Display Name</label>
+              <div className="relative">
+                <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400">
+                  <User size={16} />
+                </div>
+                <input
+                  type="text"
+                  required
+                  value={displayName}
+                  onChange={(e) => setDisplayName(e.target.value)}
+                  className="w-full pl-10 pr-4 py-3 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950 focus:ring-2 focus:ring-indigo-500 outline-none transition-all text-sm font-medium"
+                  placeholder="How others see you"
                 />
               </div>
             </div>
