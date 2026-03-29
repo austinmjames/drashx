@@ -1,9 +1,10 @@
 // Path: src/widgets/insights-panel/ui/InsightsChat.tsx
 "use client";
 
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { User as SupabaseUser } from '@supabase/supabase-js';
-import { Mail, Send, Loader2 } from 'lucide-react';
+import { Mail, Send, Loader2, AtSign, Users as UsersIcon } from 'lucide-react';
+import Image from 'next/image';
 import { supabase } from '../../../shared/api/supabase';
 
 interface Message {
@@ -19,56 +20,166 @@ interface Message {
   has_mention?: boolean;
 }
 
+interface MentionProfile {
+  username: string;
+  display_name: string | null;
+  avatar_url: string | null;
+  isSystem?: boolean;
+}
+
 interface InsightsChatProps {
   groupId: string;
   user: SupabaseUser | null;
   groupName: string;
-  onMentionReceived: () => void;
+  groupColor?: string;
   onChatOpened: () => void;
 }
+
+const getMentionColorClasses = (theme: string = 'indigo') => {
+  const mapping: Record<string, string> = {
+    rose: 'bg-rose-100 text-rose-700 dark:bg-rose-900/40 dark:text-rose-300 ring-rose-200/50',
+    amber: 'bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300 ring-amber-200/50',
+    blue: 'bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300 ring-blue-200/50',
+    emerald: 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300 ring-emerald-200/50',
+    purple: 'bg-purple-100 text-purple-700 dark:bg-purple-900/40 dark:text-purple-300 ring-purple-200/50',
+    indigo: 'bg-indigo-100 text-indigo-700 dark:bg-indigo-900/40 dark:text-indigo-300 ring-indigo-200/50',
+  };
+  return mapping[theme] || mapping.indigo;
+};
+
+const formatTimestamp = (dateString: string): string => {
+  const now = new Date();
+  const date = new Date(dateString);
+  const diffInSeconds = Math.floor((now.getTime() - date.getTime()) / 1000);
+  
+  if (diffInSeconds < 60) return 'just now';
+  const diffInMinutes = Math.floor(diffInSeconds / 60);
+  if (diffInMinutes < 60) return `${diffInMinutes}m`;
+  const diffInHours = Math.floor(diffInMinutes / 60);
+  if (diffInHours < 24 && now.getDate() === date.getDate()) return `${diffInHours}h`;
+
+  const yesterday = new Date(now);
+  yesterday.setDate(now.getDate() - 1);
+  if (
+    date.getDate() === yesterday.getDate() &&
+    date.getMonth() === yesterday.getMonth() &&
+    date.getFullYear() === yesterday.getFullYear()
+  ) {
+    return 'yesterday';
+  }
+
+  const diffInDays = Math.floor(diffInHours / 24);
+  if (diffInDays < 365) return `${diffInDays}d`;
+  return `${Math.floor(diffInDays / 365)}yr`;
+};
+
+const AvatarCircle = ({ avatarUrl, name, size = "sm" }: { avatarUrl?: string | null, name: string, size?: "sm" | "md" }) => {
+  const initial = name.charAt(0).toUpperCase();
+  const dimensions = size === "sm" ? "w-6 h-6 text-[10px]" : "w-8 h-8 text-xs";
+  
+  if (!avatarUrl) {
+    return (
+      <div className={`${dimensions} rounded-full bg-slate-200 dark:bg-slate-700 flex items-center justify-center font-bold text-slate-500`}>
+        {initial}
+      </div>
+    );
+  }
+
+  const isCustom = avatarUrl.includes(':');
+  if (isCustom) {
+    const [color] = avatarUrl.split(':');
+    const colorMap: Record<string, string> = {
+      red: 'from-red-500 to-rose-600', orange: 'from-orange-400 to-red-500', amber: 'from-amber-400 to-orange-500',
+      yellow: 'from-yellow-300 to-amber-400', green: 'from-green-400 to-emerald-600', emerald: 'from-emerald-400 to-teal-600',
+      teal: 'from-teal-400 to-cyan-600', cyan: 'from-cyan-400 to-blue-600', blue: 'from-blue-400 to-indigo-600',
+      indigo: 'from-indigo-400 to-purple-600', violet: 'from-violet-400 to-purple-600', purple: 'from-purple-400 to-fuchsia-600',
+      fuchsia: 'from-fuchsia-400 to-pink-600', pink: 'from-pink-400 to-rose-600', rose: 'from-rose-400 to-red-600',
+    };
+    const gradient = colorMap[color] || 'from-slate-400 to-slate-600';
+    return (
+      <div className={`${dimensions} rounded-full bg-linear-to-br ${gradient} flex items-center justify-center font-bold text-white shadow-sm ring-1 ring-white/20`}>
+        {initial}
+      </div>
+    );
+  }
+
+  return (
+    <div className={`${dimensions} rounded-full overflow-hidden ring-1 ring-slate-200 dark:ring-slate-800 relative`}>
+      <Image 
+        src={avatarUrl} 
+        alt={name} 
+        fill 
+        sizes={size === "sm" ? "24px" : "32px"} 
+        className="object-cover" 
+        unoptimized 
+      />
+    </div>
+  );
+};
 
 export const InsightsChat = ({ 
   groupId, 
   user, 
   groupName, 
-  onMentionReceived, 
+  groupColor = 'indigo',
   onChatOpened 
 }: InsightsChatProps) => {
   const [messages, setMessages] = useState<Message[]>([]);
   const [newMessage, setNewMessage] = useState('');
   const [isSending, setIsSending] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
+  const [mentionSuggestions, setMentionSuggestions] = useState<MentionProfile[]>([]);
+  const [showMentions, setShowMentions] = useState(false);
+  const [mentionQuery, setMentionQuery] = useState('');
+  
   const scrollRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  const updateLastRead = useCallback(async () => {
+    if (!user || !groupId) return;
+    await supabase
+      .from('group_members')
+      .update({ last_read_at: new Date().toISOString() })
+      .eq('user_id', user.id)
+      .eq('group_id', groupId);
+  }, [user, groupId]);
+
+  const fetchMessages = useCallback(async (isMounted: boolean) => {
+    if (!supabase || !groupId) return;
+    const { data } = await supabase
+      .from('group_messages')
+      .select('*, profiles:user_id(username, display_name, avatar_url)')
+      .eq('group_id', groupId)
+      .order('created_at', { ascending: true })
+      .limit(50);
+    
+    if (isMounted) {
+      if (data) setMessages(data as unknown as Message[]);
+      setIsLoading(false);
+    }
+  }, [groupId]);
 
   useEffect(() => {
     let isMounted = true;
-    onChatOpened();
-
-    const fetchMessages = async () => {
-      if (!supabase || !groupId) return;
-      const { data } = await supabase
-        .from('group_messages')
-        .select('*, profiles:user_id(username, display_name, avatar_url)')
-        .eq('group_id', groupId)
-        .order('created_at', { ascending: true })
-        .limit(50);
-      
-      if (isMounted) {
-        if (data) setMessages(data as unknown as Message[]);
-        setIsLoading(false);
-      }
-    };
-
-    fetchMessages();
     
-    const channel = supabase?.channel(`chat-${groupId}`)
+    const init = async () => {
+      onChatOpened();
+      updateLastRead();
+      await fetchMessages(isMounted);
+    };
+    init();
+    
+    const channel = supabase?.channel(`chat-view-${groupId}`)
       .on('postgres_changes', { 
         event: 'INSERT', 
         schema: 'public', 
         table: 'group_messages', 
         filter: `group_id=eq.${groupId}` 
       }, () => {
-        fetchMessages();
+        if (isMounted) {
+          fetchMessages(true);
+          updateLastRead();
+        }
       })
       .subscribe();
 
@@ -76,7 +187,7 @@ export const InsightsChat = ({
       isMounted = false;
       if (channel) supabase?.removeChannel(channel);
     };
-  }, [groupId, onMentionReceived, onChatOpened]);
+  }, [groupId, onChatOpened, fetchMessages, updateLastRead]);
 
   useEffect(() => {
     if (scrollRef.current) {
@@ -84,24 +195,119 @@ export const InsightsChat = ({
     }
   }, [messages]);
 
+  // Restricted Mention Searching: Only group members searching display_name AND username
+  useEffect(() => {
+    const searchMentions = async () => {
+      if (!showMentions) return;
+      
+      const q = mentionQuery.toLowerCase();
+      
+      const staticSuggestions: MentionProfile[] = [];
+      if ('here'.startsWith(q)) staticSuggestions.push({ username: 'here', display_name: 'Everyone active', avatar_url: null, isSystem: true });
+      if ('everyone'.startsWith(q)) staticSuggestions.push({ username: 'everyone', display_name: 'The whole group', avatar_url: null, isSystem: true });
+      
+      // Query profiles filtered by group membership AND name/username
+      const { data } = await supabase
+        .from('profiles')
+        .select(`
+          username, 
+          display_name, 
+          avatar_url,
+          group_members!inner(group_id)
+        `)
+        .eq('group_members.group_id', groupId)
+        .or(`username.ilike.%${mentionQuery}%,display_name.ilike.%${mentionQuery}%`)
+        .limit(3);
+      
+      const results = [...staticSuggestions, ...(data || [])].slice(0, 3);
+      setMentionSuggestions(results);
+    };
+
+    const timeoutId = setTimeout(searchMentions, 150);
+    return () => clearTimeout(timeoutId);
+  }, [mentionQuery, showMentions, groupId]);
+
+  const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const value = e.target.value;
+    setNewMessage(value);
+
+    const cursorPosition = e.target.selectionStart || 0;
+    const textBeforeCursor = value.slice(0, cursorPosition);
+    const lastAtPos = textBeforeCursor.lastIndexOf('@');
+
+    if (lastAtPos !== -1 && (lastAtPos === 0 || textBeforeCursor[lastAtPos - 1] === ' ')) {
+      const currentQuery = textBeforeCursor.slice(lastAtPos + 1);
+      if (!currentQuery.includes(' ')) {
+        setMentionQuery(currentQuery);
+        setShowMentions(true);
+        return;
+      }
+    }
+    
+    setShowMentions(false);
+  };
+
+  const selectMention = (profile: MentionProfile) => {
+    const cursorPosition = inputRef.current?.selectionStart || 0;
+    const textBeforeCursor = newMessage.slice(0, cursorPosition);
+    const textAfterCursor = newMessage.slice(cursorPosition);
+    const lastAtPos = textBeforeCursor.lastIndexOf('@');
+    
+    const before = newMessage.slice(0, lastAtPos);
+    const completed = `${before}@${profile.username} ${textAfterCursor}`;
+    
+    setNewMessage(completed);
+    setShowMentions(false);
+    
+    setTimeout(() => {
+      if (inputRef.current) {
+        const newPos = before.length + profile.username.length + 2; 
+        inputRef.current.focus();
+        inputRef.current.setSelectionRange(newPos, newPos);
+      }
+    }, 0);
+  };
+
   const handleSendMessage = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newMessage.trim() || isSending || !user || !supabase) return;
     
     setIsSending(true);
-    const hasMention = newMessage.includes('@') || newMessage.includes('@everyone');
-    
     const { error } = await supabase.from('group_messages').insert({
       content: newMessage,
       group_id: groupId,
       user_id: user.id,
-      has_mention: hasMention
+      has_mention: newMessage.includes('@')
     });
 
     if (!error) {
       setNewMessage('');
+      setShowMentions(false);
+      updateLastRead();
     }
     setIsSending(false);
+  };
+
+  const renderMessageContent = (content: string) => {
+    const myUsername = user?.user_metadata?.username || '';
+    const parts = content.split(/(@\w+)/g);
+    
+    return parts.map((part, index) => {
+      if (part.startsWith('@')) {
+        const username = part.slice(1);
+        const isSpecialMention = ['here', 'everyone', myUsername].includes(username);
+        
+        if (isSpecialMention) {
+          return (
+            <span key={index} className={`px-1.5 py-0.5 rounded-md font-bold ring-1 ring-inset transition-colors ${getMentionColorClasses(groupColor)}`}>
+              {part}
+            </span>
+          );
+        }
+        return <span key={index} className="font-bold opacity-90 underline decoration-dotted underline-offset-2">{part}</span>;
+      }
+      return <span key={index}>{part}</span>;
+    });
   };
 
   if (isLoading) {
@@ -115,45 +321,85 @@ export const InsightsChat = ({
 
   return (
     <div className="flex-1 flex flex-col bg-white dark:bg-slate-950 animate-in slide-in-from-top-4 duration-300 overflow-hidden">
-      <div className="flex-1 overflow-y-auto p-4 space-y-4 scrollbar-hide" ref={scrollRef}>
+      <div className="flex-1 overflow-y-auto p-4 space-y-6 scrollbar-hide" ref={scrollRef}>
         {messages.length === 0 ? (
           <div className="h-full flex flex-col items-center justify-center text-slate-400 text-center p-10 gap-3">
             <Mail size={40} className="opacity-10" />
             <p className="text-sm font-medium italic">Start a conversation with {groupName}</p>
           </div>
         ) : (
-          messages.map((msg) => (
-            <div key={msg.id} className={`flex flex-col ${msg.user_id === user?.id ? 'items-end' : 'items-start'}`}>
-              <div className="flex items-center gap-2 mb-1 px-1">
-                <span className="text-[10px] font-bold text-slate-400">{msg.profiles.display_name || msg.profiles.username}</span>
-                <span className="text-[9px] text-slate-300">{new Date(msg.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+          messages.map((msg) => {
+            const isMe = msg.user_id === user?.id;
+            const displayName = msg.profiles.display_name || msg.profiles.username;
+            
+            return (
+              <div key={msg.id} className={`flex gap-3 ${isMe ? 'flex-row-reverse' : 'flex-row'}`}>
+                <div className="shrink-0 mt-1">
+                  <AvatarCircle avatarUrl={msg.profiles.avatar_url} name={displayName} size="sm" />
+                </div>
+                <div className={`flex flex-col ${isMe ? 'items-end' : 'items-start'}`}>
+                  <div className={`flex items-center gap-2 mb-1 px-1 ${isMe ? 'flex-row-reverse' : 'flex-row'}`}>
+                    <span className="text-[10px] font-bold text-slate-500 dark:text-slate-400">{displayName}</span>
+                    <span className="text-[9px] text-slate-300 dark:text-slate-600">{formatTimestamp(msg.created_at)}</span>
+                  </div>
+                  <div className={`max-w-[85%] px-4 py-2.5 rounded-2xl text-sm leading-relaxed shadow-sm ring-1 ring-black/5 ${
+                    isMe ? 'bg-indigo-600 text-white rounded-tr-none' : 'bg-slate-50 dark:bg-slate-900 text-slate-800 dark:text-slate-200 rounded-tl-none border border-slate-100 dark:border-slate-800'
+                  }`}>
+                    {renderMessageContent(msg.content)}
+                  </div>
+                </div>
               </div>
-              <div className={`max-w-[85%] px-4 py-2.5 rounded-2xl text-sm leading-relaxed shadow-sm ${
-                msg.user_id === user?.id 
-                  ? 'bg-indigo-600 text-white rounded-tr-none' 
-                  : 'bg-slate-100 dark:bg-slate-800 text-slate-800 dark:text-slate-200 rounded-tl-none'
-              }`}>
-                {msg.content}
-              </div>
-            </div>
-          ))
+            );
+          })
         )}
       </div>
       
-      <form onSubmit={handleSendMessage} className="p-4 bg-slate-50 dark:bg-slate-900 border-t border-slate-200 dark:border-slate-800">
+      <form onSubmit={handleSendMessage} className="p-4 bg-slate-50 dark:bg-slate-900 border-t border-slate-200 dark:border-slate-800 relative">
+        {showMentions && mentionSuggestions.length > 0 && (
+          <div className="absolute bottom-full left-4 mb-2 w-72 bg-white dark:bg-slate-800 rounded-xl shadow-2xl border border-slate-200 dark:border-slate-700 overflow-hidden animate-in slide-in-from-bottom-2 duration-200 z-10">
+            <div className="p-2 border-b border-slate-100 dark:border-slate-700 bg-slate-50 dark:bg-slate-900/50 flex items-center gap-2">
+              <AtSign size={12} className="text-indigo-500" />
+              <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Mentions</span>
+            </div>
+            {mentionSuggestions.map((profile) => (
+              <button
+                key={profile.username}
+                type="button"
+                onClick={() => selectMention(profile)}
+                className="w-full flex items-center gap-3 p-3 hover:bg-slate-50 dark:hover:bg-slate-700/50 transition-colors text-left border-b border-slate-50 dark:border-slate-700/50 last:border-0"
+              >
+                {profile.isSystem ? (
+                  <div className="w-8 h-8 rounded-full bg-slate-200 dark:bg-slate-700 flex items-center justify-center text-indigo-500">
+                    <UsersIcon size={14} />
+                  </div>
+                ) : (
+                  <AvatarCircle avatarUrl={profile.avatar_url} name={profile.display_name || profile.username} size="md" />
+                )}
+                <div className="flex flex-col min-w-0">
+                  <span className="text-xs font-bold text-slate-800 dark:text-slate-100 truncate">
+                    {profile.display_name ? `${profile.display_name} (@${profile.username})` : `@${profile.username}`}
+                  </span>
+                  <span className="text-[10px] text-slate-400 truncate italic">{profile.isSystem ? 'System Mention' : 'Group Member'}</span>
+                </div>
+              </button>
+            ))}
+          </div>
+        )}
+
         <div className="relative flex items-center">
           <input 
+            ref={inputRef}
             aria-label={`Message ${groupName}`}
             value={newMessage}
-            onChange={(e) => setNewMessage(e.target.value)}
+            onChange={handleInputChange}
             placeholder={`Message ${groupName}...`}
-            className="w-full bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-2xl py-3 pl-4 pr-12 text-sm outline-none focus:border-indigo-500 transition-all shadow-sm"
+            className="w-full bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-2xl py-3 pl-4 pr-12 text-sm outline-none focus:border-indigo-500 focus:ring-4 focus:ring-indigo-500/10 transition-all shadow-sm"
           />
           <button 
             type="submit"
             title="Send Message"
             disabled={!newMessage.trim() || isSending}
-            className="absolute right-2 p-2 bg-indigo-600 text-white rounded-xl hover:bg-indigo-700 disabled:opacity-30 transition-all shadow-md shadow-indigo-600/20"
+            className="absolute right-2 p-2 bg-indigo-600 text-white rounded-xl hover:bg-indigo-700 disabled:opacity-30 transition-all shadow-md shadow-indigo-600/20 active:scale-95"
           >
             {isSending ? <Loader2 size={16} className="animate-spin" /> : <Send size={16} />}
           </button>

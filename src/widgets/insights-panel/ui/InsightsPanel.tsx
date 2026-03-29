@@ -1,7 +1,7 @@
 // Path: src/widgets/insights-panel/ui/InsightsPanel.tsx
 "use client";
 
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { User as SupabaseUser } from '@supabase/supabase-js';
 import { 
   Users, User as UserIcon, Plus, MessageSquarePlus, 
@@ -14,6 +14,7 @@ import { CommentThread } from '../../../widgets/comment-threads/ui/CommentThread
 import { Verse } from '../../../entities/verse/ui/VerseCard';
 import { InsightsChat } from './InsightsChat';
 import { InsightsActivity } from './InsightsActivity';
+import { supabase } from '../../../shared/api/supabase';
 
 // --- Helpers ---
 
@@ -62,10 +63,73 @@ export const InsightsPanel = (props: InsightsPanelProps) => {
   const [viewMode, setViewMode] = useState<ViewMode>('thread');
   const [isAddingInsight, setIsAddingInsight] = useState(false);
   const [isGroupMenuOpen, setIsGroupMenuOpen] = useState(false);
+  
+  // Notification States
   const [unreadMentions, setUnreadMentions] = useState(0);
+  const [hasUnreadMessages, setHasUnreadMessages] = useState(false);
+  
   const groupMenuRef = useRef<HTMLDivElement>(null);
-
   const activeVerseId = selectedVerse?.verse_id || selectedVerse?.id;
+
+  /**
+   * Fetches the persistent unread message/mention status from the database.
+   * This is used to hydrate the red/blue notification dots on load.
+   */
+  const fetchUnreadStatus = useCallback(async (isMounted: boolean) => {
+    if (!user || !activeGroupId || activeGroupId === user.id) return;
+    
+    const { data, error } = await supabase.rpc('get_group_unread_status', {
+      p_user_id: user.id,
+      p_group_id: activeGroupId
+    });
+
+    if (isMounted && !error && data?.[0]) {
+      setHasUnreadMessages(data[0].has_unread);
+      setUnreadMentions(data[0].mention_count);
+    }
+  }, [user, activeGroupId]);
+
+  // 1. Initial Load & Realtime Listener
+  useEffect(() => {
+    let isMounted = true;
+    if (!supabase || !activeGroupId || activeGroupId === user?.id) return;
+
+    // Trigger initial hydration asynchronously to avoid cascading synchronous render warnings
+    const initialize = async () => {
+      await fetchUnreadStatus(isMounted);
+    };
+    initialize();
+
+    const channel = supabase.channel(`notifications-${activeGroupId}`)
+      .on('postgres_changes', {
+        event: 'INSERT',
+        schema: 'public',
+        table: 'group_messages',
+        filter: `group_id=eq.${activeGroupId}`
+      }, (payload) => {
+        // Only track if user is not currently looking at the chat tab
+        if (viewMode !== 'chat' && isMounted) {
+          const msg = payload.new;
+          const myUsername = user?.user_metadata?.username;
+          
+          const isMention = msg.content.includes('@here') || 
+                            msg.content.includes('@everyone') || 
+                            (myUsername && msg.content.includes(`@${myUsername}`));
+
+          if (isMention) {
+            setUnreadMentions(prev => prev + 1);
+          } else {
+            setHasUnreadMessages(true);
+          }
+        }
+      })
+      .subscribe();
+
+    return () => {
+      isMounted = false;
+      supabase.removeChannel(channel);
+    };
+  }, [activeGroupId, viewMode, user, fetchUnreadStatus]);
 
   // Handle Click Outside for Group Menu
   useEffect(() => {
@@ -93,6 +157,13 @@ export const InsightsPanel = (props: InsightsPanelProps) => {
 
   const { Icon: ActiveIcon, color: ActiveColor } = getGroupBranding(activeGroup?.icon_url, activeGroup?.color_theme, isPersonal);
 
+  const handleOpenChat = () => {
+    if (!user) return setShowAuth(true);
+    setViewMode('chat');
+    setUnreadMentions(0);
+    setHasUnreadMessages(false);
+  };
+
   return (
     <section className="w-full md:w-112.5 flex-none bg-slate-50 dark:bg-slate-950/40 flex flex-col relative overflow-hidden md:border-l border-slate-200 dark:border-slate-800 pointer-events-auto h-full">
       
@@ -119,7 +190,6 @@ export const InsightsPanel = (props: InsightsPanelProps) => {
             </h3>
           ) : null}
 
-          {/* Group Selector Dropdown Trigger */}
           <div className="relative ml-2" ref={groupMenuRef}>
             <button 
               onClick={() => setIsGroupMenuOpen(!isGroupMenuOpen)}
@@ -135,11 +205,9 @@ export const InsightsPanel = (props: InsightsPanelProps) => {
               <ChevronDown size={14} className={`text-slate-500 transition-transform ${isGroupMenuOpen ? 'rotate-180' : ''}`} />
             </button>
 
-            {/* Selection Menu */}
             {isGroupMenuOpen && (
               <div className="absolute left-0 mt-2 w-64 bg-white dark:bg-slate-950 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-2xl z-50 overflow-hidden animate-in fade-in slide-in-from-top-2">
                 <div className="p-3 border-b text-[10px] font-black uppercase tracking-widest text-slate-400 bg-slate-50/50 dark:bg-slate-900/50">Study Context</div>
-                
                 <div className="max-h-72 overflow-y-auto scrollbar-hide py-1">
                   <button 
                     onClick={() => { setActiveGroupId(user?.id || null); setIsGroupMenuOpen(false); }} 
@@ -164,7 +232,7 @@ export const InsightsPanel = (props: InsightsPanelProps) => {
                               <div className={`w-6 h-6 rounded-full flex items-center justify-center text-white ${branding.color.hex}`}>
                                 <branding.Icon size={12} strokeWidth={2.5} />
                               </div>
-                              <span className="truncate max-w-35">{group.name}</span>
+                              <span className="truncate max-w-40">{group.name}</span>
                             </div>
                             {isActive && <Check size={14} />}
                           </button>
@@ -190,19 +258,19 @@ export const InsightsPanel = (props: InsightsPanelProps) => {
         <div className="flex items-center gap-1">
           {!isPersonal && (
             <button 
-              onClick={() => {
-                if (!user) return setShowAuth(true);
-                setViewMode(viewMode === 'chat' ? 'thread' : 'chat');
-              }}
+              onClick={handleOpenChat}
               className={`p-2.5 rounded-full transition-all relative ${viewMode === 'chat' ? 'bg-indigo-100 text-indigo-600' : 'text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800'}`}
               title="Group Messages"
             >
               <Mail size={22} />
-              {unreadMentions > 0 && (
-                <span className="absolute -top-0.5 -right-0.5 min-w-5 h-5 px-1 bg-indigo-600 text-white text-[9px] font-black rounded-full flex items-center justify-center border-2 border-white dark:border-slate-900 animate-bounce">
-                  {unreadMentions}
-                </span>
-              )}
+              
+              {/* Mentions Priority: Red Dot/Badge */}
+              {unreadMentions > 0 ? (
+                <span className="absolute top-1 right-1 w-2.5 h-2.5 bg-red-500 rounded-full border-2 border-white dark:border-slate-900 animate-pulse" />
+              ) : hasUnreadMessages ? (
+                /* Unread General Priority: Blue Dot */
+                <span className="absolute top-1 right-1 w-2.5 h-2.5 bg-blue-500 rounded-full border-2 border-white dark:border-slate-900" />
+              ) : null}
             </button>
           )}
 
@@ -220,7 +288,7 @@ export const InsightsPanel = (props: InsightsPanelProps) => {
           {onCloseMobile && (
             <button 
               onClick={onCloseMobile} 
-              title="Close Panel"
+              title="Close Panel" 
               className="md:hidden p-2.5 rounded-full text-slate-400 hover:bg-slate-200 dark:hover:bg-slate-800"
             >
               <X size={24} />
@@ -236,8 +304,11 @@ export const InsightsPanel = (props: InsightsPanelProps) => {
             groupId={activeGroupId} 
             user={user} 
             groupName={currentGroupName}
-            onMentionReceived={() => viewMode !== 'chat' && setUnreadMentions(prev => prev + 1)}
-            onChatOpened={() => setUnreadMentions(0)}
+            groupColor={activeGroup?.color_theme}
+            onChatOpened={() => {
+              setUnreadMentions(0);
+              setHasUnreadMessages(false);
+            }}
           />
         ) : viewMode === 'notifications' && user ? (
           <InsightsActivity 
