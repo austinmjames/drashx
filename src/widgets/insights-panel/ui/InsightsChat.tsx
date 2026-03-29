@@ -32,6 +32,7 @@ interface InsightsChatProps {
   user: SupabaseUser | null;
   groupName: string;
   groupColor?: string;
+  myUsername: string; // Passed from parent to ensure reliable detection
   onChatOpened: () => void;
 }
 
@@ -43,6 +44,19 @@ const getMentionColorClasses = (theme: string = 'indigo') => {
     emerald: 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300 ring-emerald-200/50',
     purple: 'bg-purple-100 text-purple-700 dark:bg-purple-900/40 dark:text-purple-300 ring-purple-200/50',
     indigo: 'bg-indigo-100 text-indigo-700 dark:bg-indigo-900/40 dark:text-indigo-300 ring-indigo-200/50',
+  };
+  return mapping[theme] || mapping.indigo;
+};
+
+// Styling for the entire message bubble when you are tagged
+const getMentionBubbleClasses = (theme: string = 'indigo') => {
+  const mapping: Record<string, string> = {
+    rose: 'bg-rose-100 dark:bg-rose-900/40 text-slate-900 dark:text-slate-100 rounded-tl-none border-2 border-rose-400 dark:border-rose-600 shadow-md ring-2 ring-rose-200/50 dark:ring-rose-900/50',
+    amber: 'bg-amber-100 dark:bg-amber-900/40 text-slate-900 dark:text-slate-100 rounded-tl-none border-2 border-amber-400 dark:border-amber-600 shadow-md ring-2 ring-amber-200/50 dark:ring-amber-900/50',
+    blue: 'bg-blue-100 dark:bg-blue-900/40 text-slate-900 dark:text-slate-100 rounded-tl-none border-2 border-blue-400 dark:border-blue-600 shadow-md ring-2 ring-blue-200/50 dark:ring-blue-900/50',
+    emerald: 'bg-emerald-100 dark:bg-emerald-900/40 text-slate-900 dark:text-slate-100 rounded-tl-none border-2 border-emerald-400 dark:border-emerald-600 shadow-md ring-2 ring-emerald-200/50 dark:ring-emerald-900/50',
+    purple: 'bg-purple-100 dark:bg-purple-900/40 text-slate-900 dark:text-slate-100 rounded-tl-none border-2 border-purple-400 dark:border-purple-600 shadow-md ring-2 ring-purple-200/50 dark:ring-purple-900/50',
+    indigo: 'bg-indigo-100 dark:bg-indigo-900/40 text-slate-900 dark:text-slate-100 rounded-tl-none border-2 border-indigo-400 dark:border-indigo-600 shadow-md ring-2 ring-indigo-200/50 dark:ring-indigo-900/50',
   };
   return mapping[theme] || mapping.indigo;
 };
@@ -122,12 +136,15 @@ export const InsightsChat = ({
   user, 
   groupName, 
   groupColor = 'indigo',
+  myUsername,
   onChatOpened 
 }: InsightsChatProps) => {
   const [messages, setMessages] = useState<Message[]>([]);
   const [newMessage, setNewMessage] = useState('');
   const [isSending, setIsSending] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
+  
+  // Mention States
   const [mentionSuggestions, setMentionSuggestions] = useState<MentionProfile[]>([]);
   const [showMentions, setShowMentions] = useState(false);
   const [mentionQuery, setMentionQuery] = useState('');
@@ -195,7 +212,7 @@ export const InsightsChat = ({
     }
   }, [messages]);
 
-  // Restricted Mention Searching: Only group members searching display_name AND username
+  // Bulletproof Mention Searching: Merge profiles from local messages + DB group_members
   useEffect(() => {
     const searchMentions = async () => {
       if (!showMentions) return;
@@ -206,26 +223,63 @@ export const InsightsChat = ({
       if ('here'.startsWith(q)) staticSuggestions.push({ username: 'here', display_name: 'Everyone active', avatar_url: null, isSystem: true });
       if ('everyone'.startsWith(q)) staticSuggestions.push({ username: 'everyone', display_name: 'The whole group', avatar_url: null, isSystem: true });
       
-      // Query profiles filtered by group membership AND name/username
-      const { data } = await supabase
-        .from('profiles')
-        .select(`
-          username, 
-          display_name, 
-          avatar_url,
-          group_members!inner(group_id)
-        `)
-        .eq('group_members.group_id', groupId)
-        .or(`username.ilike.%${mentionQuery}%,display_name.ilike.%${mentionQuery}%`)
-        .limit(3);
+      const uniqueProfiles = new Map<string, MentionProfile>();
+
+      // Source A: Always extract profiles from loaded messages (Guaranteed to work even if Prod RLS blocks queries)
+      messages.forEach(m => {
+        if (m.profiles && m.profiles.username) {
+          uniqueProfiles.set(m.profiles.username, {
+            username: m.profiles.username,
+            display_name: m.profiles.display_name || null,
+            avatar_url: m.profiles.avatar_url || null
+          });
+        }
+      });
+
+      // Source B: Attempt to fetch from group_members to get users who haven't spoken yet
+      try {
+        const { data: memberData } = await supabase
+          .from('group_members')
+          .select(`
+            profiles:user_id (
+              username,
+              display_name,
+              avatar_url
+            )
+          `)
+          .eq('group_id', groupId);
+
+        if (memberData) {
+          memberData.forEach((m: unknown) => {
+            const record = m as { profiles: MentionProfile | MentionProfile[] | null };
+            const p = Array.isArray(record.profiles) ? record.profiles[0] : record.profiles;
+            
+            if (p && p.username) {
+              uniqueProfiles.set(p.username, {
+                username: p.username,
+                display_name: p.display_name || null,
+                avatar_url: p.avatar_url || null
+              });
+            }
+          });
+        }
+      } catch (err) {
+        console.warn("Could not fetch full member list from DB, relying on local chat history.", err);
+      }
       
-      const results = [...staticSuggestions, ...(data || [])].slice(0, 3);
+      // Filter combined unique list locally
+      const profileSuggestions = Array.from(uniqueProfiles.values()).filter(p => 
+        (p.username && p.username.toLowerCase().includes(q)) ||
+        (p.display_name && p.display_name.toLowerCase().includes(q))
+      );
+      
+      const results = [...staticSuggestions, ...profileSuggestions].slice(0, 4);
       setMentionSuggestions(results);
     };
 
     const timeoutId = setTimeout(searchMentions, 150);
     return () => clearTimeout(timeoutId);
-  }, [mentionQuery, showMentions, groupId]);
+  }, [mentionQuery, showMentions, groupId, messages]);
 
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const value = e.target.value;
@@ -289,13 +343,13 @@ export const InsightsChat = ({
   };
 
   const renderMessageContent = (content: string) => {
-    const myUsername = user?.user_metadata?.username || '';
     const parts = content.split(/(@\w+)/g);
     
     return parts.map((part, index) => {
       if (part.startsWith('@')) {
-        const username = part.slice(1);
-        const isSpecialMention = ['here', 'everyone', myUsername].includes(username);
+        // Case-insensitive matching for individual mention tags within text
+        const username = part.slice(1).toLowerCase();
+        const isSpecialMention = ['here', 'everyone', myUsername.toLowerCase()].includes(username);
         
         if (isSpecialMention) {
           return (
@@ -332,6 +386,22 @@ export const InsightsChat = ({
             const isMe = msg.user_id === user?.id;
             const displayName = msg.profiles.display_name || msg.profiles.username;
             
+            // Calculate if the current user is mentioned in this specific message (Case-Insensitive)
+            const contentLower = msg.content.toLowerCase();
+            const myUserLower = myUsername ? `@${myUsername.toLowerCase()}` : null;
+            const isMentioned = !isMe && (
+              contentLower.includes('@here') || 
+              contentLower.includes('@everyone') || 
+              (myUserLower !== null && contentLower.includes(myUserLower))
+            );
+
+            // Apply different container classes based on Mention state
+            const bubbleBaseClasses = isMe 
+              ? 'bg-indigo-600 text-white rounded-tr-none border border-transparent' 
+              : isMentioned 
+                ? getMentionBubbleClasses(groupColor)
+                : 'bg-slate-50 dark:bg-slate-900 text-slate-800 dark:text-slate-200 rounded-tl-none border border-slate-100 dark:border-slate-800';
+
             return (
               <div key={msg.id} className={`flex gap-3 ${isMe ? 'flex-row-reverse' : 'flex-row'}`}>
                 <div className="shrink-0 mt-1">
@@ -342,9 +412,7 @@ export const InsightsChat = ({
                     <span className="text-[10px] font-bold text-slate-500 dark:text-slate-400">{displayName}</span>
                     <span className="text-[9px] text-slate-300 dark:text-slate-600">{formatTimestamp(msg.created_at)}</span>
                   </div>
-                  <div className={`max-w-[85%] px-4 py-2.5 rounded-2xl text-sm leading-relaxed shadow-sm ring-1 ring-black/5 ${
-                    isMe ? 'bg-indigo-600 text-white rounded-tr-none' : 'bg-slate-50 dark:bg-slate-900 text-slate-800 dark:text-slate-200 rounded-tl-none border border-slate-100 dark:border-slate-800'
-                  }`}>
+                  <div className={`max-w-[85%] px-4 py-2.5 rounded-2xl text-sm leading-relaxed shadow-sm ring-1 ring-black/5 ${bubbleBaseClasses}`}>
                     {renderMessageContent(msg.content)}
                   </div>
                 </div>

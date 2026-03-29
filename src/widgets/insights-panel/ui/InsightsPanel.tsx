@@ -63,6 +63,7 @@ export const InsightsPanel = (props: InsightsPanelProps) => {
   const [viewMode, setViewMode] = useState<ViewMode>('thread');
   const [isAddingInsight, setIsAddingInsight] = useState(false);
   const [isGroupMenuOpen, setIsGroupMenuOpen] = useState(false);
+  const [myUsername, setMyUsername] = useState<string>('');
   
   // Notification States
   const [unreadMentions, setUnreadMentions] = useState(0);
@@ -70,6 +71,16 @@ export const InsightsPanel = (props: InsightsPanelProps) => {
   
   const groupMenuRef = useRef<HTMLDivElement>(null);
   const activeVerseId = selectedVerse?.verse_id || selectedVerse?.id;
+
+  // Fetch true username securely from profiles table to ensure mention detection works
+  useEffect(() => {
+    if (user) {
+      supabase.from('profiles').select('username').eq('id', user.id).single()
+        .then(({ data }) => {
+          if (data) setMyUsername(data.username);
+        });
+    }
+  }, [user]);
 
   /**
    * Fetches the persistent unread message/mention status from the database.
@@ -94,7 +105,7 @@ export const InsightsPanel = (props: InsightsPanelProps) => {
     let isMounted = true;
     if (!supabase || !activeGroupId || activeGroupId === user?.id) return;
 
-    // Trigger initial hydration asynchronously to avoid cascading synchronous render warnings
+    // Trigger initial hydration asynchronously
     const initialize = async () => {
       await fetchUnreadStatus(isMounted);
     };
@@ -110,11 +121,14 @@ export const InsightsPanel = (props: InsightsPanelProps) => {
         // Only track if user is not currently looking at the chat tab
         if (viewMode !== 'chat' && isMounted) {
           const msg = payload.new;
-          const myUsername = user?.user_metadata?.username;
           
-          const isMention = msg.content.includes('@here') || 
-                            msg.content.includes('@everyone') || 
-                            (myUsername && msg.content.includes(`@${myUsername}`));
+          // Ensure comparisons are case-insensitive
+          const contentLower = msg.content.toLowerCase();
+          const myUserLower = myUsername ? `@${myUsername.toLowerCase()}` : null;
+          
+          const isMention = contentLower.includes('@here') || 
+                            contentLower.includes('@everyone') || 
+                            (myUserLower && contentLower.includes(myUserLower));
 
           if (isMention) {
             setUnreadMentions(prev => prev + 1);
@@ -129,7 +143,7 @@ export const InsightsPanel = (props: InsightsPanelProps) => {
       isMounted = false;
       supabase.removeChannel(channel);
     };
-  }, [activeGroupId, viewMode, user, fetchUnreadStatus]);
+  }, [activeGroupId, viewMode, user, fetchUnreadStatus, myUsername]);
 
   // Handle Click Outside for Group Menu
   useEffect(() => {
@@ -305,6 +319,7 @@ export const InsightsPanel = (props: InsightsPanelProps) => {
             user={user} 
             groupName={currentGroupName}
             groupColor={activeGroup?.color_theme}
+            myUsername={myUsername}
             onChatOpened={() => {
               setUnreadMentions(0);
               setHasUnreadMessages(false);
