@@ -134,7 +134,7 @@ export const BroadcastModal = () => {
   const handleDonateClick = () => {
     if (!activeBroadcast) return;
     logInteraction(activeBroadcast.id, 'click');
-    window.open('https://paypal.me/austin@jenisan.com', '_blank');
+    window.open('https://www.paypal.com/ncp/payment/CBJNBBXQRVSKA', '_blank');
     setIsVisible(false);
   };
 
