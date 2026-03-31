@@ -4,6 +4,14 @@ import { VerseWord } from './VerseCard';
 import { supabase } from '@/shared/api/supabase';
 
 /**
+ * English stopwords to prevent false-positive dictionary matching on common 
+ * linking words that are purely artifacts of English translation.
+ */
+const PREFIX_STOP_WORDS = new Set([
+  'and', 'the', 'a', 'an', 'of'
+]);
+
+/**
  * Helper to decode Hebrew OSIS/OSMHB morphology codes into simplified human-readable strings.
  */
 const decodeMorphology = (morph: string | null): { pos: string; grammar: string } => {
@@ -104,20 +112,20 @@ const WordTooltip = ({
       cleanItem = cleanItem.replace(/[.,!?;:()"“”‘’]/g, '');
       cleanItem = cleanItem.trim();
       
-      if (cleanItem.length > 1) {
+      if (cleanItem.length > 0 && !PREFIX_STOP_WORDS.has(cleanItem)) {
         parts.add(cleanItem);
       }
     });
 
-    // Strip dashes from the verse to guarantee clean matching
+    // Strip stopwords and split dashes from the verse to guarantee clean matching
     const cleanTrans = verseTranslation.toLowerCase().replace(/[.,!?;:()"“”‘’]/g, '').replace(/-/g, ' ');
-    const translationTokens = cleanTrans.split(/\s+/).filter(t => t.length > 2);
+    const translationTokens = cleanTrans.split(/\s+/).filter(t => !PREFIX_STOP_WORDS.has(t) && t.length > 0);
 
     const parsedLabels = Array.from(parts).map(dictItem => {
       const normalize = (w: string) => w.replace(/(s|es|ed|ing|ly)$/, '');
       
       // Break the dictionary phrase down to test against the verse
-      const labelWords = dictItem.split(/\s+/).filter(w => w.length > 2);
+      const labelWords = dictItem.split(/\s+/).filter(w => !PREFIX_STOP_WORDS.has(w) && w.length > 0);
       const matchedVerseTokens = new Set<string>();
 
       for (const token of translationTokens) {
