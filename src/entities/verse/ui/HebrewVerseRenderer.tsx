@@ -18,7 +18,7 @@ const STOP_WORDS = new Set([
   'should', 'now', 'it', 'he', 'she', 'they', 'them', 'their', 'his', 'hers', 'its', 'my', 
   'mine', 'your', 'yours', 'our', 'ours', 'we', 'us', 'me', 'i', 'shall', 'unto', 'let', 
   'hath', 'thou', 'thee', 'thy', 'thine', 'ye', 'o', 'without', 'upon', 'within', 'also', 'even',
-  'yea', 'yet', 'till', 'this', 'that', 'these', 'those', 'who', 'whom', 'which', 'what', 'whose'
+  'yea', 'yet', 'till', 'these', 'those', 'who', 'whom', 'which', 'what', 'whose'
 ]);
 
 /**
