@@ -4,6 +4,23 @@ import { VerseWord } from './VerseCard';
 import { supabase } from '@/shared/api/supabase';
 
 /**
+ * Common English stopwords to prevent false-positive dictionary matching
+ * e.g., prevents "waste" from falsely matching the translation token "was".
+ */
+const STOP_WORDS = new Set([
+  'is', 'are', 'was', 'were', 'be', 'been', 'being', 'have', 'has', 'had', 'do', 'does', 'did', 
+  'a', 'an', 'the', 'and', 'but', 'if', 'or', 'because', 'as', 'until', 'while', 'of', 'at', 
+  'by', 'for', 'with', 'about', 'against', 'between', 'into', 'through', 'during', 'before', 
+  'after', 'above', 'below', 'to', 'from', 'up', 'down', 'in', 'out', 'on', 'off', 'over', 
+  'under', 'again', 'further', 'then', 'once', 'here', 'there', 'when', 'where', 'why', 'how', 
+  'all', 'any', 'both', 'each', 'few', 'more', 'most', 'other', 'some', 'such', 'no', 'nor', 
+  'not', 'only', 'own', 'same', 'so', 'than', 'too', 'very', 'can', 'will', 'just', 'don', 
+  'should', 'now', 'it', 'he', 'she', 'they', 'them', 'their', 'his', 'hers', 'its', 'my', 
+  'mine', 'your', 'yours', 'our', 'ours', 'we', 'us', 'me', 'i', 'shall', 'unto', 'let', 
+  'hath', 'thou', 'thee', 'thy', 'thine', 'ye', 'o', 'without', 'upon', 'within', 'also', 'even'
+]);
+
+/**
  * Helper to decode Hebrew OSIS/OSMHB morphology codes into simplified human-readable strings.
  */
 const decodeMorphology = (morph: string | null): { pos: string; grammar: string } => {
@@ -94,7 +111,7 @@ const WordTooltip = ({
       cleanItem = cleanItem.replace(/^(a|an|the|to|of|and|or)\s+/g, '');
       cleanItem = cleanItem.replace(/[.,!?;:()"“”‘’]/g, '');
       cleanItem = cleanItem.trim();
-      if (cleanItem.length > 1 && !['and', 'or', 'the', 'of', 'to', 'a', 'an'].includes(cleanItem)) {
+      if (cleanItem.length > 1 && !STOP_WORDS.has(cleanItem)) {
         parts.add(cleanItem);
       }
     });
@@ -106,18 +123,44 @@ const WordTooltip = ({
       const lowerLabel = label.toLowerCase();
       const normalize = (w: string) => w.replace(/(s|es|ed|ing|ly)$/, '');
       const normLabel = normalize(lowerLabel);
+      
+      // Extract keywords from multi-word definitions (e.g., "without form" -> ["form"])
+      const labelWords = lowerLabel.split(/\s+/).filter(w => w.length > 3 && !STOP_WORDS.has(w));
 
       const matches = translationTokens.filter(token => {
+        // Block all stopwords from triggering wildcard matches
+        if (STOP_WORDS.has(token)) return false;
+
+        // 1. Direct Match
         if (token === lowerLabel) return true;
+        
+        // 2. Stemmed Match
         const normToken = normalize(token);
         if (normToken === normLabel) return true;
         if (normToken + 'e' === normLabel || normLabel + 'e' === normToken) return true;
-        if (token.length >= 3 && lowerLabel.length >= 3) {
-          if (token.startsWith(lowerLabel) || lowerLabel.startsWith(token)) return true;
+        
+        // 3. Wildcard Match (Requires 4+ letters to prevent short-word collisions)
+        if (token.length >= 4 && lowerLabel.length >= 4) {
+          if (token.startsWith(lowerLabel) || lowerLabel.startsWith(token) || token.includes(lowerLabel)) return true;
         }
+
+        // 4. Internal Multi-Word Phrase Match (e.g. verse "unformed" matches dict "without form")
+        if (labelWords.length > 0) {
+          for (const lw of labelWords) {
+            if (STOP_WORDS.has(lw)) continue;
+            const normLw = normalize(lw);
+            if (normToken === normLw) return true;
+            if (normToken + 'e' === normLw || normLw + 'e' === normToken) return true;
+            if (token.length >= 4 && lw.length >= 4) {
+              if (token.startsWith(lw) || lw.startsWith(token) || token.includes(lw)) return true;
+            }
+          }
+        }
+
         return false;
       });
 
+      // Catch full phrases if they exist verbatim in the text
       if (lowerLabel.includes(' ') && cleanTrans.includes(lowerLabel)) {
         matches.push(lowerLabel);
       }
@@ -148,7 +191,6 @@ const WordTooltip = ({
     }
 
     // 3. EXCLUSIVE CONTEXT LOGIC:
-    // If any item is contextual, filter out everything that ISN'T contextual.
     const contextualItems = uniqueResults.filter(res => res.isContextual);
     if (contextualItems.length > 0) {
       return contextualItems;
