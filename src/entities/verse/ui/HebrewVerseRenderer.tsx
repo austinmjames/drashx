@@ -17,7 +17,8 @@ const STOP_WORDS = new Set([
   'not', 'only', 'own', 'same', 'so', 'than', 'too', 'very', 'can', 'will', 'just', 'don', 
   'should', 'now', 'it', 'he', 'she', 'they', 'them', 'their', 'his', 'hers', 'its', 'my', 
   'mine', 'your', 'yours', 'our', 'ours', 'we', 'us', 'me', 'i', 'shall', 'unto', 'let', 
-  'hath', 'thou', 'thee', 'thy', 'thine', 'ye', 'o', 'without', 'upon', 'within', 'also', 'even'
+  'hath', 'thou', 'thee', 'thy', 'thine', 'ye', 'o', 'without', 'upon', 'within', 'also', 'even',
+  'yea', 'yet', 'till', 'this', 'that', 'these', 'those', 'who', 'whom', 'which', 'what', 'whose'
 ]);
 
 /**
@@ -72,7 +73,6 @@ const WordTooltip = ({
     shortDef: string | null 
   } | null>(null);
 
-  // Fetch fresh data from the lexicon table on hover
   useEffect(() => {
     const fetchLexicon = async () => {
       if (!word.strongs) return;
@@ -102,7 +102,15 @@ const WordTooltip = ({
     if (!sourceMeaning) return [];
     
     let raw = sourceMeaning;
-    raw = raw.replace(/×/g, '').replace(/\bX\b/g, '').replace(/\([^)]*-[^)]*\)/g, '').replace(/\([^)]*\)/g, ''); 
+    
+    // Clean Strong's metadata artifacts ([phrase], + signs, multipliers)
+    raw = raw.replace(/\[[^\]]*\]/g, ''); 
+    raw = raw.replace(/\+/g, ''); 
+    raw = raw.replace(/×/g, '').replace(/\bX\b/g, ''); 
+    
+    // Remove all parenthetical notes completely to avoid broken suffixes 
+    // (e.g., "-ness" from "good (deed, -ness)") becoming standalone definitions.
+    raw = raw.replace(/\([^)]*\)/g, '');
     
     const parts = new Set<string>();
     raw.split(/[,/;\n]/).forEach(item => {
@@ -111,77 +119,66 @@ const WordTooltip = ({
       cleanItem = cleanItem.replace(/^(a|an|the|to|of|and|or)\s+/g, '');
       cleanItem = cleanItem.replace(/[.,!?;:()"“”‘’]/g, '');
       cleanItem = cleanItem.trim();
+      
       if (cleanItem.length > 1 && !STOP_WORDS.has(cleanItem)) {
         parts.add(cleanItem);
       }
     });
 
-    const cleanTrans = verseTranslation.toLowerCase().replace(/[.,!?;:()"“”‘’]/g, '');
-    const translationTokens = cleanTrans.split(/\s+/);
+    // Strip stopwords and split dashes from the verse to guarantee clean matching
+    const cleanTrans = verseTranslation.toLowerCase().replace(/[.,!?;:()"“”‘’]/g, '').replace(/-/g, ' ');
+    const translationTokens = cleanTrans.split(/\s+/).filter(t => !STOP_WORDS.has(t) && t.length > 2);
 
-    const parsedLabels = Array.from(parts).map(label => {
-      const lowerLabel = label.toLowerCase();
+    const parsedLabels = Array.from(parts).map(dictItem => {
       const normalize = (w: string) => w.replace(/(s|es|ed|ing|ly)$/, '');
-      const normLabel = normalize(lowerLabel);
       
-      // Extract keywords from multi-word definitions (e.g., "without form" -> ["form"])
-      const labelWords = lowerLabel.split(/\s+/).filter(w => w.length > 3 && !STOP_WORDS.has(w));
+      // Break the dictionary phrase down to test against the verse
+      const labelWords = dictItem.split(/\s+/).filter(w => !STOP_WORDS.has(w) && w.length > 2);
+      const matchedVerseTokens = new Set<string>();
 
-      const matches = translationTokens.filter(token => {
-        // Block all stopwords from triggering wildcard matches
-        if (STOP_WORDS.has(token)) return false;
-
-        // 1. Direct Match
-        if (token === lowerLabel) return true;
-        
-        // 2. Stemmed Match
+      for (const token of translationTokens) {
         const normToken = normalize(token);
-        if (normToken === normLabel) return true;
-        if (normToken + 'e' === normLabel || normLabel + 'e' === normToken) return true;
-        
-        // 3. Wildcard Match (Requires 4+ letters to prevent short-word collisions)
-        if (token.length >= 4 && lowerLabel.length >= 4) {
-          if (token.startsWith(lowerLabel) || lowerLabel.startsWith(token) || token.includes(lowerLabel)) return true;
+
+        // 1. Check if the entire dictionary phrase matches
+        const normDictItem = normalize(dictItem);
+        if (normToken === normDictItem || normToken + 'e' === normDictItem || normDictItem + 'e' === normToken) {
+          matchedVerseTokens.add(token);
+        } else if (token.length >= 4 && dictItem.length >= 4 && (token.startsWith(dictItem) || dictItem.startsWith(token))) {
+          // Removed greedy .includes() to prevent "form" matching "unformed"
+          matchedVerseTokens.add(token);
         }
 
-        // 4. Internal Multi-Word Phrase Match (e.g. verse "unformed" matches dict "without form")
-        if (labelWords.length > 0) {
-          for (const lw of labelWords) {
-            if (STOP_WORDS.has(lw)) continue;
-            const normLw = normalize(lw);
-            if (normToken === normLw) return true;
-            if (normToken + 'e' === normLw || normLw + 'e' === normToken) return true;
-            if (token.length >= 4 && lw.length >= 4) {
-              if (token.startsWith(lw) || lw.startsWith(token) || token.includes(lw)) return true;
-            }
+        // 2. Check internal words
+        for (const lw of labelWords) {
+          const normLw = normalize(lw);
+          if (normToken === normLw || normToken + 'e' === normLw || normLw + 'e' === normToken) {
+            matchedVerseTokens.add(token);
+          } else if (token.length >= 4 && lw.length >= 4 && (token.startsWith(lw) || lw.startsWith(token))) {
+            // Removed greedy .includes() to prevent "form" matching "unformed"
+            matchedVerseTokens.add(token);
           }
         }
-
-        return false;
-      });
-
-      // Catch full phrases if they exist verbatim in the text
-      if (lowerLabel.includes(' ') && cleanTrans.includes(lowerLabel)) {
-        matches.push(lowerLabel);
       }
 
-      const uniqueMatches = [...new Set(matches)];
-      const isContextual = uniqueMatches.length > 0;
+      const isContextual = matchedVerseTokens.size > 0;
       
-      let displayLabel = label.charAt(0).toUpperCase() + label.slice(1);
+      // Default: The exact dictionary pill
+      let displayLabel = dictItem.charAt(0).toUpperCase() + dictItem.slice(1);
+
+      // User Request: Inject the text extracted from the verse ONLY if it matches the pill
       if (isContextual) {
-        displayLabel = uniqueMatches.map(m => m.charAt(0).toUpperCase() + m.slice(1)).join(', ');
+        displayLabel = Array.from(matchedVerseTokens)
+          .map(m => m.charAt(0).toUpperCase() + m.slice(1))
+          .join(', ');
       }
         
       return { label: displayLabel, isContextual };
     });
 
-    // 1. Sort contextual matches to the top
-    parsedLabels.sort((a, b) => (b.isContextual ? 1 : 0) - (a.isContextual ? 1 : 0));
-
-    // 2. Deduplicate results
+    // Deduplicate labels
     const uniqueResults: typeof parsedLabels = [];
     const seen = new Set<string>();
+    
     for (const res of parsedLabels) {
       const key = res.label.toLowerCase();
       if (!seen.has(key)) {
@@ -190,13 +187,12 @@ const WordTooltip = ({
       }
     }
 
-    // 3. EXCLUSIVE CONTEXT LOGIC:
+    // EXCLUSIVE CONTEXT LOGIC: Only show context matches if they exist
     const contextualItems = uniqueResults.filter(res => res.isContextual);
     if (contextualItems.length > 0) {
-      return contextualItems;
+      return contextualItems.slice(0, 4);
     }
 
-    // Otherwise, return the standard top results
     return uniqueResults.slice(0, 4);
   }, [sourceMeaning, verseTranslation]);
 
@@ -204,13 +200,12 @@ const WordTooltip = ({
   
   const positionClasses = placement === 'top' ? "bottom-full mb-3.5" : "top-full mt-3.5";
   const arrowPlacementClasses = placement === 'top' ? "-bottom-1.5 border-r border-b" : "-top-1.5 border-l border-t";
-  
   const alignClasses = align === 'left' ? "left-0" : align === 'right' ? "right-0" : "left-1/2 -translate-x-1/2";
   const arrowAlignClasses = align === 'left' ? "left-4" : align === 'right' ? "right-4" : "left-1/2 -translate-x-1/2";
 
   return (
     <div className={`absolute z-50 pointer-events-none invisible opacity-0 group-hover/word:visible group-hover/word:opacity-100 transition-all duration-200 scale-95 group-hover/word:scale-100 ${positionClasses} ${alignClasses}`}>
-      <div className="bg-white dark:bg-slate-900 text-slate-900 dark:text-white rounded-2xl shadow-2xl border border-slate-200 dark:border-white/10 p-5 min-w-60 max-w-[85vw] sm:max-w-xs flex flex-col gap-2.5 shadow-indigo-500/20">
+      <div dir="ltr" className="bg-white dark:bg-slate-900 text-slate-900 dark:text-white rounded-2xl shadow-2xl border border-slate-200 dark:border-white/10 p-5 min-w-60 max-w-[85vw] sm:max-w-xs flex flex-col gap-2.5 shadow-indigo-500/20">
         <div className="flex items-center justify-between gap-4">
           <span className="text-2xl font-serif text-indigo-600 dark:text-indigo-400 font-medium" dir="rtl">{word.text.replace(/\//g, '')}</span>
           <div className="flex flex-col items-end">
@@ -220,12 +215,10 @@ const WordTooltip = ({
         </div>
         
         <div className="flex items-center gap-2 text-sm text-slate-600 dark:text-slate-300 font-medium">
-           {/* Pronunciation from Lexicon Table */}
            <span className="font-sans font-semibold tracking-tight">{displayPron}</span>
            {displayXlit !== 'N/A' && (
              <>
                <span className="text-slate-300 dark:text-slate-700">|</span>
-               {/* Transliteration from Lexicon Table */}
                <span className="font-mono text-xs opacity-80">{displayXlit}</span>
              </>
            )}
@@ -234,10 +227,9 @@ const WordTooltip = ({
         <div className="py-0.5 flex flex-wrap gap-x-2 gap-y-1">
           {definitionItems.length === 0 ? <p className="text-sm font-bold text-slate-400 italic">Tap for definition</p> : 
             definitionItems.map((item, i) => (
-              <div key={i} className="flex items-center gap-1">
+              <div key={i} className="flex items-center">
                 <span className={`text-sm leading-snug ${item.isContextual ? 'font-black text-indigo-600 dark:text-indigo-400 underline decoration-indigo-500/40 underline-offset-4' : 'font-bold text-slate-700 dark:text-slate-200'}`}>
-                  {item.label}
-                  {i < definitionItems.length - 1 && <span className="ml-1 text-slate-300 dark:text-slate-700 font-normal no-underline">,</span>}
+                  {item.label}{i < definitionItems.length - 1 && <span className="text-slate-500 dark:text-slate-400 font-normal no-underline">,</span>}
                 </span>
               </div>
             ))
@@ -282,7 +274,6 @@ export const HebrewVerseRenderer = ({
     const container = target.closest('.overflow-y-auto, [class*="max-w-"]') || document.body;
     const containerRect = container.getBoundingClientRect();
     
-    // Flip tooltip to top or bottom based on remaining space in visible frame
     const placement = rect.top - containerRect.top < 220 ? 'bottom' : 'top';
     
     let align: 'left' | 'center' | 'right' = 'center';
