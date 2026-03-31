@@ -4,14 +4,6 @@ import { VerseWord } from './VerseCard';
 import { supabase } from '@/shared/api/supabase';
 
 /**
- * Common English stopwords to prevent false-positive dictionary matching
- * e.g., prevents "waste" from falsely matching the translation token "was".
- */
-const STOP_WORDS = new Set([
-  'is', 'and', 'the', 'to', 'it',
-]);
-
-/**
  * Helper to decode Hebrew OSIS/OSMHB morphology codes into simplified human-readable strings.
  */
 const decodeMorphology = (morph: string | null): { pos: string; grammar: string } => {
@@ -93,58 +85,58 @@ const WordTooltip = ({
     
     let raw = sourceMeaning;
     
-    // Clean Strong's metadata artifacts ([phrase], + signs, multipliers)
-    raw = raw.replace(/\[[^\]]*\]/g, ''); 
-    raw = raw.replace(/\+/g, ''); 
-    raw = raw.replace(/×/g, '').replace(/\bX\b/g, ''); 
-    
-    // Remove all parenthetical notes completely to avoid broken suffixes 
-    // (e.g., "-ness" from "good (deed, -ness)") becoming standalone definitions.
+    // 1. STRIP PARENTHESES FIRST: Removes comma-separated suffixes like "(deed, -ness)" entirely 
+    // BEFORE the string is split, preventing fragments from becoming false pills.
     raw = raw.replace(/\([^)]*\)/g, '');
     
     const parts = new Set<string>();
+    
     raw.split(/[,/;\n]/).forEach(item => {
-      let cleanItem = item.toLowerCase().trim();
+      // 2. Drop phrases marked with [idiom] or [phrase] completely
+      if (/\[[^\]]*\]/.test(item)) return;
+
+      // 3. Clean remaining artifacts
+      let cleanItem = item.replace(/\+/g, ''); 
+      cleanItem = cleanItem.replace(/×/g, '').replace(/\bX\b/g, ''); 
+      cleanItem = cleanItem.toLowerCase().trim();
       cleanItem = cleanItem.replace(/^(by implication|by extension|by resemblance|i\.e\.|e\.g\.|figuratively|literally|specifically|generally|perhaps|also|as|for|but)\s+/g, '');
       cleanItem = cleanItem.replace(/^(a|an|the|to|of|and|or)\s+/g, '');
       cleanItem = cleanItem.replace(/[.,!?;:()"“”‘’]/g, '');
       cleanItem = cleanItem.trim();
       
-      if (cleanItem.length > 1 && !STOP_WORDS.has(cleanItem)) {
+      if (cleanItem.length > 1) {
         parts.add(cleanItem);
       }
     });
 
-    // Strip stopwords and split dashes from the verse to guarantee clean matching
+    // Strip dashes from the verse to guarantee clean matching
     const cleanTrans = verseTranslation.toLowerCase().replace(/[.,!?;:()"“”‘’]/g, '').replace(/-/g, ' ');
-    const translationTokens = cleanTrans.split(/\s+/).filter(t => !STOP_WORDS.has(t) && t.length > 2);
+    const translationTokens = cleanTrans.split(/\s+/).filter(t => t.length > 2);
 
     const parsedLabels = Array.from(parts).map(dictItem => {
       const normalize = (w: string) => w.replace(/(s|es|ed|ing|ly)$/, '');
       
       // Break the dictionary phrase down to test against the verse
-      const labelWords = dictItem.split(/\s+/).filter(w => !STOP_WORDS.has(w) && w.length > 2);
+      const labelWords = dictItem.split(/\s+/).filter(w => w.length > 2);
       const matchedVerseTokens = new Set<string>();
 
       for (const token of translationTokens) {
         const normToken = normalize(token);
 
-        // 1. Check if the entire dictionary phrase matches
+        // Check if the dictionary phrase matches the verse token
         const normDictItem = normalize(dictItem);
         if (normToken === normDictItem || normToken + 'e' === normDictItem || normDictItem + 'e' === normToken) {
           matchedVerseTokens.add(token);
         } else if (token.length >= 4 && dictItem.length >= 4 && (token.startsWith(dictItem) || dictItem.startsWith(token))) {
-          // Removed greedy .includes() to prevent "form" matching "unformed"
           matchedVerseTokens.add(token);
         }
 
-        // 2. Check internal words
+        // Check internal words
         for (const lw of labelWords) {
           const normLw = normalize(lw);
           if (normToken === normLw || normToken + 'e' === normLw || normLw + 'e' === normToken) {
             matchedVerseTokens.add(token);
           } else if (token.length >= 4 && lw.length >= 4 && (token.startsWith(lw) || lw.startsWith(token))) {
-            // Removed greedy .includes() to prevent "form" matching "unformed"
             matchedVerseTokens.add(token);
           }
         }
@@ -155,8 +147,8 @@ const WordTooltip = ({
       // Default: The exact dictionary pill
       let displayLabel = dictItem.charAt(0).toUpperCase() + dictItem.slice(1);
 
-      // User Request: Inject the text extracted from the verse ONLY if it matches the pill
-      if (isContextual) {
+      // Overwrite with the exact Verse Text ONLY if it's a contextual match AND it's a single word definition
+      if (isContextual && !dictItem.includes(' ')) {
         displayLabel = Array.from(matchedVerseTokens)
           .map(m => m.charAt(0).toUpperCase() + m.slice(1))
           .join(', ');
