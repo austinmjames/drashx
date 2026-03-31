@@ -1,7 +1,11 @@
 // Path: src/entities/comment/ui/CommentItem.tsx
 import React, { useState, useRef, useEffect, useMemo } from 'react';
+import Image from 'next/image';
 import { Reply, Edit2, Trash2, CheckCircle2, MoreVertical, Heart, MessageCircle, ChevronDown, ChevronUp, User } from 'lucide-react';
+import { useRouter } from 'next/navigation';
 import { PROFILE_COLORS, ALL_AVATAR_ICONS } from '../../../features/profile/edit-profile/config/avatarOptions';
+import { SmartText } from '../../../shared/ui/SmartText';
+import { getVersePath } from '@/shared/lib/reference-navigation';
 
 export interface ProfileData {
   username?: string;
@@ -56,10 +60,12 @@ export const CommentItem = ({
   onToggleResolved,
   isResolvedExpanded
 }: CommentItemProps) => {
+  const router = useRouter();
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [isTextExpanded, setIsTextExpanded] = useState(false);
   const [isContainerHovered, setIsContainerHovered] = useState(false); 
   const [hoveredIcon, setHoveredIcon] = useState<string | null>(null);
+  const [imgError, setImgError] = useState(false);
   
   const menuRef = useRef<HTMLDivElement>(null);
   
@@ -68,37 +74,38 @@ export const CommentItem = ({
   const displayName = profile?.display_name || profile?.username || 'Anonymous';
   const initial = displayName.substring(0, 2).toUpperCase();
 
-  // Custom Avatar Parsing
+  // --- Avatar Logic (FIXED) ---
   const avatarUrl = profile?.avatar_url;
-  let isCustomAvatar = false;
-  
-  // Explicitly type CustomIconComp to accept both Lucide icons and our custom functional components
-  let CustomIconComp: React.ElementType<{ size?: number; className?: string; strokeWidth?: number }> = User;
-  let avatarBgClass = 'bg-indigo-100 dark:bg-indigo-900/50';
-  let avatarTextClass = 'text-indigo-600 dark:text-indigo-400 text-[10px] font-black';
+  let isSystemAvatar = false;
+  let CustomIconComp: React.ElementType = User;
+  let avatarBgClass = ''; // Reverted to className implementation 
+  let avatarTextClass = 'text-indigo-600 dark:text-indigo-400 font-black';
 
-  if (avatarUrl) {
-    if (avatarUrl.includes(':') && !avatarUrl.startsWith('http')) {
-      isCustomAvatar = true;
-      const [colorId, iconId] = avatarUrl.split(':');
-      const colorObj = PROFILE_COLORS.find(c => c.id === colorId);
-      if (colorObj) {
-        avatarBgClass = colorObj.hex;
-        avatarTextClass = 'text-white';
-      }
-      const foundIcon = ALL_AVATAR_ICONS.find(i => i.id === iconId)?.icon;
-      if (foundIcon) CustomIconComp = foundIcon;
+  if (avatarUrl && avatarUrl.includes(':') && !avatarUrl.startsWith('http')) {
+    isSystemAvatar = true;
+    const [colorId, iconId] = avatarUrl.split(':');
+    
+    const colorObj = PROFILE_COLORS.find(c => c.id === colorId);
+    if (colorObj) {
+      avatarBgClass = colorObj.hex; // Injects tailwind classes like 'bg-purple-500'
+      avatarTextClass = 'text-white';
     }
+    
+    const foundIcon = ALL_AVATAR_ICONS.find(i => i.id === iconId)?.icon;
+    if (foundIcon) CustomIconComp = foundIcon;
   }
 
-  const textContent = useMemo(() => {
-    if (typeof document === 'undefined') return "";
-    const tmp = document.createElement('div');
-    tmp.innerHTML = comment.content;
-    return tmp.textContent || tmp.innerText || "";
+  const isExternalImage = avatarUrl && avatarUrl.startsWith('http') && !imgError;
+
+  const handleReferenceJump = (book: string, chapter: number, verse: number) => {
+    router.push(getVersePath(book, chapter, verse));
+  };
+
+  const strippedContent = useMemo(() => {
+    return comment.content.replace(/<[^>]*>?/gm, '');
   }, [comment.content]);
 
-  const needsTruncation = textContent.length > 200;
+  const needsTruncation = strippedContent.length > 250;
 
   const relativeTimestamp = useMemo(() => {
     const now = new Date();
@@ -133,29 +140,34 @@ export const CommentItem = ({
   const nestedClasses = "bg-white dark:bg-slate-900/60 border border-slate-100 dark:border-slate-800 shadow-sm p-3 rounded-2xl";
   const rootClasses = `py-3 px-3 -mx-1 rounded-2xl transition-colors duration-200 ${isContainerHovered ? 'bg-slate-50 dark:bg-slate-900/40' : ''}`;
 
-  const showActions = isContainerHovered || isMenuOpen;
-
   return (
     <div 
       onMouseEnter={() => setIsContainerHovered(true)}
       onMouseLeave={() => setIsContainerHovered(false)}
-      className={`relative flex flex-col gap-1.5 pointer-events-auto ${
+      className={`relative flex flex-col gap-1.5 pointer-events-auto isolate transition-all duration-200 ${
         isResolved ? resolvedClasses : (comment.parent_id ? nestedClasses : rootClasses)
-      } ${isMenuOpen ? 'z-50' : 'z-auto'}`}
+      } ${isContainerHovered || isMenuOpen ? 'z-50' : 'z-auto'}`}
     >
-      
-      {/* Header Row */}
       <div className="flex items-center justify-between gap-2">
         <div className="flex items-center gap-1.5 flex-wrap min-w-0">
-          {/* Avatar Rendering */}
-          <div className={`w-6 h-6 rounded-full flex items-center justify-center shrink-0 overflow-hidden border border-white dark:border-slate-800 transition-colors ${avatarBgClass} ${avatarTextClass}`}>
-            {avatarUrl && !isCustomAvatar ? (
-              // eslint-disable-next-line @next/next/no-img-element
-              <img src={avatarUrl} alt={displayName} className="w-full h-full object-cover" />
-            ) : isCustomAvatar ? (
+          
+          {/* Avatar Rendering Fixed: Using className instead of style */}
+          <div 
+            className={`w-6 h-6 rounded-full flex items-center justify-center shrink-0 overflow-hidden border border-white dark:border-slate-800 transition-colors ${avatarBgClass || 'bg-indigo-100 dark:bg-indigo-900/50'} ${avatarTextClass}`}
+          >
+            {isExternalImage ? (
+              <Image 
+                src={avatarUrl} 
+                alt={displayName} 
+                width={24} 
+                height={24} 
+                className="w-full h-full object-cover"
+                onError={() => setImgError(true)}
+              />
+            ) : isSystemAvatar ? (
               <CustomIconComp size={14} strokeWidth={2.5} />
             ) : (
-              initial
+              <span className="text-[10px] font-black select-none">{initial}</span>
             )}
           </div>
           
@@ -178,7 +190,7 @@ export const CommentItem = ({
 
         <div className="flex items-center gap-1 shrink-0">
           {isResolved && (
-            <span title="Resolved" aria-label="Resolved" className="flex items-center text-blue-300 mr-1">
+            <span title="Resolved" className="flex items-center text-blue-300 mr-1">
               <CheckCircle2 size={16} />
             </span>
           )}
@@ -186,17 +198,10 @@ export const CommentItem = ({
           {isAuthor && (
             <div className="relative" ref={menuRef}>
               <button 
-                onClick={(e) => {
-                  e.stopPropagation();
-                  setIsMenuOpen(!isMenuOpen);
-                }} 
+                onClick={(e) => { e.stopPropagation(); setIsMenuOpen(!isMenuOpen); }} 
                 className={`flex items-center justify-center p-1 transition-all duration-200 outline-none ${
-                  showActions ? 'opacity-100' : 'opacity-0'
-                } ${
-                  isResolved 
-                    ? 'text-white' 
-                    : isMenuOpen ? 'text-slate-900 dark:text-white' : 'text-slate-500'
-                }`}
+                  isContainerHovered || isMenuOpen ? 'opacity-100' : 'opacity-0'
+                } ${isResolved ? 'text-white' : isMenuOpen ? 'text-slate-900 dark:text-white' : 'text-slate-500'}`}
                 title="Options"
               >
                 <MoreVertical size={18} />
@@ -224,12 +229,19 @@ export const CommentItem = ({
       </div>
 
       <div className="relative">
-        <div 
-          className={`text-sm leading-relaxed whitespace-pre-wrap wrap-break-word pr-2 [&_b]:font-bold [&_i]:italic [&_u]:underline transition-all ${
-            isResolved ? 'text-white' : 'text-slate-700 dark:text-slate-300'
-          } ${!isTextExpanded && needsTruncation ? 'max-h-20 overflow-hidden' : ''}`}
-          dangerouslySetInnerHTML={{ __html: comment.content }}
-        />
+        <div className={`text-sm leading-relaxed pr-2 transition-all ${
+          isResolved ? 'text-white' : 'text-slate-700 dark:text-slate-300'
+        } ${!isTextExpanded && needsTruncation ? 'max-h-32 overflow-hidden hover:overflow-visible group-hover:overflow-visible' : ''}`}>
+          
+          {/* SmartText now has HTML parsing activated for Rich Text comment blocks */}
+          <SmartText 
+            text={comment.content} 
+            isHtml={true}
+            onReferenceClick={handleReferenceJump} 
+            className="[&_b]:font-bold [&_i]:italic [&_u]:underline"
+          />
+
+        </div>
         {needsTruncation && (
           <button 
             onClick={() => setIsTextExpanded(!isTextExpanded)}

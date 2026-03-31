@@ -2,7 +2,7 @@
 "use client";
 
 import React, { useState, useEffect, useCallback } from 'react';
-import { useRouter, useParams } from 'next/navigation';
+import { useRouter, useParams, useSearchParams } from 'next/navigation';
 import { User as SupabaseUser } from '@supabase/supabase-js';
 import { supabase } from '../../../shared/api/supabase';
 import { VerseCard, Verse } from '../../../entities/verse/ui/VerseCard';
@@ -12,17 +12,13 @@ import { TableOfContents } from '../../../widgets/table-of-contents/ui/TableOfCo
 import { GroupManagementModal } from '../../../features/groups/manage-groups/ui/GroupManagementModal';
 import { ReaderHeader } from '../../../widgets/reader-header/ui/ReaderHeader';
 import { InsightsPanel } from '../../../widgets/insights-panel/ui/InsightsPanel';
+import { LexiconModal } from '../../../features/lexicon/ui/LexiconModal';
 import { AlertCircle, User as UserIcon } from 'lucide-react';
 
 let globalIsSidebarOpen = true;
 
 interface Group { id: string; name: string; icon_url?: string; color_theme?: string; }
-
-interface GroupMemberJoin {
-  group_id: string;
-  groups: Group | Group[];
-}
-
+interface GroupMemberJoin { group_id: string; groups: Group | Group[]; }
 interface ProfilePreferences {
   last_group_id?: string | null;
   reader_language_mode?: 'both' | 'en' | 'he' | null;
@@ -42,15 +38,14 @@ const VerseSkeleton = () => (
 export const ReaderPage = ({ bookName, chapterNumber }: { bookName?: string; chapterNumber?: number }) => {
   const router = useRouter();
   const params = useParams();
+  const searchParams = useSearchParams();
   
-  // Mobile & Layout States
   const [isSidebarOpen, setIsSidebarOpen] = useState(globalIsSidebarOpen);
   const [isInsightsOpen, setIsInsightsOpen] = useState(false);
   const [isManageGroupsOpen, setIsManageGroupsOpen] = useState(false);
   const [showAuth, setShowAuth] = useState(false);
   const [showProfile, setShowProfile] = useState(false);
   
-  // Settings States
   const [languageMode, setLanguageMode] = useState<'both' | 'en' | 'he'>('both');
   const [translation, setTranslation] = useState<'jps1917' | 'modernized'>('jps1917');
   const [hebrewStyle, setHebrewStyle] = useState<'niqqud' | 'no-niqqud'>('niqqud');
@@ -66,8 +61,54 @@ export const ReaderPage = ({ bookName, chapterNumber }: { bookName?: string; cha
   const [hebrewTitle, setHebrewTitle] = useState('');
   const [isLoading, setIsLoading] = useState(true);
   const [fetchError, setFetchError] = useState<string | null>(null);
+  const [selectedStrongs, setSelectedStrongs] = useState<string | null>(null);
 
-  // Auto-close sidebar on mobile initial load
+  // --- Navigation Support: Scrolling Logic ---
+  
+  /**
+   * Smoothly scrolls to a specific verse and selects it.
+   */
+  const scrollToVerse = useCallback((vNum: number) => {
+    // Small timeout to ensure the DOM elements have rendered
+    setTimeout(() => {
+      const element = document.getElementById(`verse-${vNum}`);
+      if (element) {
+        element.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        
+        // Find the verse object to update selection and insights
+        const verseObj = verses.find(v => (v.verse_num || v.verse_number) === vNum);
+        if (verseObj) setSelectedVerse(verseObj);
+      }
+    }, 150);
+  }, [verses]);
+
+  // Check for ?v= parameter on load or change
+  useEffect(() => {
+    const vParam = searchParams.get('v');
+    if (vParam && !isLoading && verses.length > 0) {
+      scrollToVerse(parseInt(vParam));
+    }
+  }, [searchParams, isLoading, verses, scrollToVerse]);
+
+  // Listen for custom 'reader-jump-to-verse' events from Lexicon/Comments
+  useEffect(() => {
+    const handleJumpEvent = (e: Event) => {
+      const customEvent = e as CustomEvent<{ book: string; chapter: number; verse: number }>;
+      const { book, chapter, verse } = customEvent.detail;
+      const currentBook = decodeURIComponent(activeBook);
+      
+      // If we are already on the correct page, scroll immediately.
+      if (currentBook === book && activeChapter === chapter) {
+        scrollToVerse(verse);
+      }
+    };
+
+    window.addEventListener('reader-jump-to-verse', handleJumpEvent);
+    return () => window.removeEventListener('reader-jump-to-verse', handleJumpEvent);
+  }, [activeBook, activeChapter, scrollToVerse]);
+
+  // --- Existing Logic ---
+
   useEffect(() => {
     if (typeof window !== 'undefined' && window.innerWidth < 768) {
       setIsSidebarOpen(false);
@@ -76,17 +117,11 @@ export const ReaderPage = ({ bookName, chapterNumber }: { bookName?: string; cha
   }, []);
 
   const fetchUserProfilePreference = useCallback(async (userId: string) => {
-    const { data } = await supabase
-      .from('profiles')
-      .select('last_group_id, reader_language_mode, reader_translation, reader_hebrew_style')
-      .eq('id', userId)
-      .single();
-    
+    const { data } = await supabase.from('profiles').select('*').eq('id', userId).single();
     if (data) {
       const prefs = data as ProfilePreferences;
       if (prefs.last_group_id) setActiveGroupId(prefs.last_group_id);
       else setActiveGroupId(userId);
-
       if (prefs.reader_language_mode) setLanguageMode(prefs.reader_language_mode);
       if (prefs.reader_translation) setTranslation(prefs.reader_translation);
       if (prefs.reader_hebrew_style) setHebrewStyle(prefs.reader_hebrew_style);
@@ -114,34 +149,22 @@ export const ReaderPage = ({ bookName, chapterNumber }: { bookName?: string; cha
 
   const fetchGroups = useCallback(async () => {
     if (!user) return;
-    const { data } = await supabase
-      .from('group_members')
-      .select('group_id, groups (id, name, icon_url, color_theme)')
-      .eq('user_id', user.id);
-      
+    const { data } = await supabase.from('group_members').select('group_id, groups (*)').eq('user_id', user.id);
     if (data) {
-      setMyGroups((data as unknown as GroupMemberJoin[]).map((m) => {
-        const groupObj = Array.isArray(m.groups) ? m.groups[0] : m.groups;
-        return groupObj;
-      }));
+      const joinedData = data as unknown as GroupMemberJoin[];
+      setMyGroups(joinedData.map((m) => Array.isArray(m.groups) ? m.groups[0] : m.groups));
     }
   }, [user]);
 
   useEffect(() => { fetchGroups(); }, [fetchGroups]);
 
-  // Persistent Setters wrapped in useCallback to satisfy linter dependencies
   const updatePreference = useCallback(async (updates: Partial<ProfilePreferences>) => {
-    if (user) {
-      await supabase.from('profiles').update(updates).eq('id', user.id);
-    }
+    if (user) await supabase.from('profiles').update(updates).eq('id', user.id);
   }, [user]);
 
   const handleSetActiveGroupId = async (id: string | null) => {
     setActiveGroupId(id);
-    if (user) {
-      const saveId = id === user.id ? null : id;
-      updatePreference({ last_group_id: saveId });
-    }
+    if (user) updatePreference({ last_group_id: id === user.id ? null : id });
   };
 
   const handleSetLanguageMode = (mode: 'both' | 'en' | 'he') => {
@@ -150,7 +173,6 @@ export const ReaderPage = ({ bookName, chapterNumber }: { bookName?: string; cha
   };
 
   const handleSetTranslation = (trans: 'jps1917' | 'modernized') => {
-    if (trans === 'modernized') return;
     setTranslation(trans);
     updatePreference({ reader_translation: trans });
   };
@@ -160,84 +182,43 @@ export const ReaderPage = ({ bookName, chapterNumber }: { bookName?: string; cha
     updatePreference({ reader_hebrew_style: style });
   };
 
-  // Tracking reading position
-  useEffect(() => {
-    if (user && activeBook) {
-      updatePreference({ 
-        last_book: decodeURIComponent(activeBook).trim(), 
-        last_chapter: activeChapter 
-      });
-    }
-  }, [user, activeBook, activeChapter, updatePreference]);
-
-  // Handle Fetching Verses
   useEffect(() => {
     const fetchVerses = async () => {
       setIsLoading(true); setFetchError(null);
       const cleanBookName = activeBook && activeBook !== 'undefined' ? decodeURIComponent(activeBook).trim() : '';
       try {
-        const { data: bookData } = await supabase.from('books').select('id, name_en, name_he').ilike('name_en', cleanBookName).single();
+        const { data: bookData } = await supabase.from('books').select('*').ilike('name_en', cleanBookName).single();
         if (!bookData) throw new Error(`Book "${cleanBookName}" not found.`);
         setHebrewTitle(bookData.name_he);
-        
-        const { data: versesData } = await supabase
-          .from('reader_verses_view')
-          .select('*')
-          .eq('book_id', bookData.name_en)
-          .eq('chapter_num', activeChapter)
-          .order('verse_num', { ascending: true });
-          
+        const { data: versesData } = await supabase.from('reader_verses_view').select('*').eq('book_id', bookData.name_en).eq('chapter_num', activeChapter).order('verse_num', { ascending: true });
         setVerses((versesData || []) as Verse[]);
       } catch (err: unknown) { 
-        setFetchError(err instanceof Error ? err.message : String(err)); 
-      } finally { setIsLoading(false); }
+        const errorMessage = err instanceof Error ? err.message : String(err);
+        setFetchError(errorMessage); 
+      } finally { 
+        setIsLoading(false); 
+      }
     };
     if (activeBook) fetchVerses();
   }, [activeBook, activeChapter]); 
 
-  // Sync selection separately when verse list changes (e.g. chapter navigation)
-  // This satisfies the linter without triggering re-fetches on simple verse selection clicks.
-  useEffect(() => {
-    if (verses.length > 0) {
-      const currentId = selectedVerse?.verse_id || selectedVerse?.id;
-      const isStillInList = verses.some(v => (v.verse_id || v.id) === currentId);
-      if (!isStillInList) {
-        setSelectedVerse(verses[0]);
-      }
-    }
-  }, [verses, selectedVerse?.id, selectedVerse?.verse_id]);
-
   return (
     <div className="flex h-screen bg-white dark:bg-slate-950 overflow-hidden text-slate-900 dark:text-slate-100 relative">
-      
-      {/* Mobile Overlay: Left Sidebar */}
       {isSidebarOpen && (
-        <div 
-          className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-30 md:hidden animate-in fade-in"
-          onClick={() => { setIsSidebarOpen(false); globalIsSidebarOpen = false; }}
-        />
+        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-30 md:hidden animate-in fade-in" onClick={() => setIsSidebarOpen(false)} />
       )}
-
-      {/* Left Navigation Pane */}
-      <aside className={`
-        absolute md:relative z-40 h-full flex flex-col bg-slate-50 dark:bg-slate-900/30 border-r border-slate-200 dark:border-slate-800 transition-all duration-300 ease-in-out
-        ${isSidebarOpen ? 'translate-x-0 w-72 shadow-2xl md:shadow-none opacity-100' : '-translate-x-full md:translate-x-0 w-72 md:w-0 md:opacity-0 md:pointer-events-none'}
-      `}>
+      <aside className={`absolute md:relative z-40 h-full flex flex-col bg-slate-50 dark:bg-slate-900/30 border-r border-slate-200 dark:border-slate-800 transition-all duration-300 ease-in-out ${isSidebarOpen ? 'translate-x-0 w-72 shadow-2xl md:shadow-none' : '-translate-x-full md:translate-x-0 w-72 md:w-0 md:opacity-0 md:pointer-events-none'}`}>
         <div className="flex-1 overflow-y-auto w-72"><TableOfContents /></div>
-        <div className="p-4 border-t border-slate-200 dark:border-slate-800 w-72 bg-slate-50 dark:bg-slate-900/30">
-          <button onClick={() => user ? setShowProfile(true) : setShowAuth(true)} title={user ? "Profile" : "Sign In"} className="w-full flex items-center justify-center gap-2 py-3 md:py-2 bg-slate-200 dark:bg-slate-800 rounded-xl md:rounded-lg text-sm font-bold md:font-medium active:scale-95 transition-transform"><UserIcon size={16} /> {user ? 'My Profile' : 'Sign In'}</button>
+        <div className="p-4 border-t border-slate-200 dark:border-slate-800 w-72">
+          <button onClick={() => user ? setShowProfile(true) : setShowAuth(true)} className="w-full flex items-center justify-center gap-2 py-3 bg-slate-200 dark:bg-slate-800 rounded-xl text-sm font-bold transition-transform active:scale-95"><UserIcon size={16} /> {user ? 'My Profile' : 'Sign In'}</button>
         </div>
       </aside>
 
       <main className="flex-1 flex overflow-hidden relative">
-        
-        {/* Center Reader Pane */}
-        <section className="flex-1 overflow-y-auto border-r border-slate-100 dark:border-slate-900 scrollbar-hide flex flex-col relative">
+        <section className="flex-1 overflow-y-auto border-r border-slate-100 dark:border-slate-900 scrollbar-hide flex flex-col relative scroll-smooth">
           <ReaderHeader 
-            isSidebarOpen={isSidebarOpen} 
-            toggleSidebar={() => { setIsSidebarOpen(!isSidebarOpen); globalIsSidebarOpen = !isSidebarOpen; }}
-            isInsightsOpen={isInsightsOpen}
-            toggleInsights={() => setIsInsightsOpen(!isInsightsOpen)}
+            isSidebarOpen={isSidebarOpen} toggleSidebar={() => setIsSidebarOpen(!isSidebarOpen)}
+            isInsightsOpen={isInsightsOpen} toggleInsights={() => setIsInsightsOpen(!isInsightsOpen)}
             activeBook={decodeURIComponent(activeBook)} activeChapter={activeChapter} hebrewTitle={hebrewTitle}
             handlePrevChapter={() => activeChapter > 1 && router.push(`/read/${encodeURIComponent(activeBook)}/${activeChapter - 1}`)}
             handleNextChapter={() => router.push(`/read/${encodeURIComponent(activeBook)}/${activeChapter + 1}`)}
@@ -245,70 +226,35 @@ export const ReaderPage = ({ bookName, chapterNumber }: { bookName?: string; cha
             translation={translation} setTranslation={handleSetTranslation}
             hebrewStyle={hebrewStyle} setHebrewStyle={handleSetHebrewStyle}
           />
-          
           <div className="max-w-3xl mx-auto py-6 md:py-8 w-full flex-1 md:px-6">
             {isLoading ? <div className="space-y-4">{[...Array(6)].map((_, i) => <VerseSkeleton key={i} />)}</div> : fetchError ? <div className="flex flex-col items-center justify-center h-64 text-rose-500 gap-4"><AlertCircle size={48}/><p>{fetchError}</p></div> : 
               verses.map((v) => (
-                <VerseCard 
-                  key={v.verse_id || v.id} 
-                  verse={v} 
-                  active={(selectedVerse?.verse_id || selectedVerse?.id) === (v.verse_id || v.id)} 
-                  languageMode={languageMode} 
-                  hebrewStyle={hebrewStyle} 
-                  translation={translation} 
-                  onClick={() => {
-                    setSelectedVerse(v);
-                    setIsInsightsOpen(true); // Auto-open insights on mobile tap
-                  }} 
-                />
+                // Added ID and scroll-mt to support jump-to-verse navigation
+                <div key={v.verse_id || v.id} id={`verse-${v.verse_num || v.verse_number}`} className="scroll-mt-24">
+                  <VerseCard 
+                    verse={v} 
+                    active={(selectedVerse?.verse_id || selectedVerse?.id) === (v.verse_id || v.id)} 
+                    languageMode={languageMode} hebrewStyle={hebrewStyle} translation={translation} 
+                    onClick={() => { setSelectedVerse(v); setIsInsightsOpen(true); }}
+                    onWordClick={setSelectedStrongs} 
+                  />
+                </div>
               ))
             }
           </div>
         </section>
-
-        {/* Mobile Overlay: Insights Panel */}
-        {isInsightsOpen && (
-          <div 
-            className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-30 md:hidden animate-in fade-in"
-            onClick={() => setIsInsightsOpen(false)}
-          />
-        )}
-
-        {/* Right Commentary/Insights Pane Wrapper */}
-        <div className={`
-          absolute md:relative z-40 inset-y-0 right-0 h-full bg-white dark:bg-slate-950 md:bg-transparent transition-transform duration-300 ease-in-out
-          w-full md:w-auto
-          ${isInsightsOpen ? 'translate-x-0 shadow-2xl md:shadow-none' : 'translate-x-full md:translate-x-0'}
-          md:flex
-        `}>
+        <div className={`${isInsightsOpen ? 'translate-x-0' : 'translate-x-full md:translate-x-0'} absolute md:relative z-40 inset-y-0 right-0 h-full bg-white dark:bg-slate-950 md:bg-transparent transition-transform duration-300 w-full md:w-auto md:flex`}>
           <InsightsPanel 
-            user={user} 
-            activeBook={activeBook} 
-            activeChapter={activeChapter} 
-            selectedVerse={selectedVerse} 
-            isLoading={isLoading} 
-            onSelectVerse={setSelectedVerse} 
-            activeGroupId={activeGroupId} 
-            setActiveGroupId={handleSetActiveGroupId} 
-            myGroups={myGroups} 
-            setIsManageGroupsOpen={setIsManageGroupsOpen} 
-            setShowAuth={setShowAuth}
-            onCloseMobile={() => setIsInsightsOpen(false)} 
+            user={user} activeBook={activeBook} activeChapter={activeChapter} selectedVerse={selectedVerse} 
+            isLoading={isLoading} onSelectVerse={setSelectedVerse} activeGroupId={activeGroupId} 
+            setActiveGroupId={handleSetActiveGroupId} myGroups={myGroups} setIsManageGroupsOpen={setIsManageGroupsOpen} 
+            setShowAuth={setShowAuth} onCloseMobile={() => setIsInsightsOpen(false)} 
           />
         </div>
-
       </main>
 
-      {isManageGroupsOpen && user && (
-        <GroupManagementModal 
-          isOpen={isManageGroupsOpen} 
-          onClose={() => setIsManageGroupsOpen(false)} 
-          userId={user.id} 
-          onGroupsChange={fetchGroups}
-          onGroupCreated={(newId) => { fetchGroups(); handleSetActiveGroupId(newId); }}
-        />
-      )}
-      
+      {isManageGroupsOpen && user && <GroupManagementModal isOpen={isManageGroupsOpen} onClose={() => setIsManageGroupsOpen(false)} userId={user.id} onGroupsChange={fetchGroups} onGroupCreated={(id) => { fetchGroups(); handleSetActiveGroupId(id); }} />}
+      <LexiconModal strongsNumber={selectedStrongs} isOpen={!!selectedStrongs} onClose={() => setSelectedStrongs(null)} />
       {showAuth && <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 p-4 backdrop-blur-sm"><div className="relative"><button onClick={() => setShowAuth(false)} className="absolute -top-12 right-0 text-white font-bold">Close</button><AuthForm /></div></div>}
       {showProfile && user && <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 p-4 backdrop-blur-sm"><ProfileSettings userId={user.id} onClose={() => setShowProfile(false)} /></div>}
     </div>
