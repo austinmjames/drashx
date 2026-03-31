@@ -8,7 +8,7 @@ import { supabase } from '@/shared/api/supabase';
  * e.g., prevents "waste" from falsely matching the translation token "was".
  */
 const STOP_WORDS = new Set([
-  'is',
+  'is', 'and', 'the', 'to', 'it',
 ]);
 
 /**
