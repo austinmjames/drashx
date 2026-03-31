@@ -116,7 +116,7 @@ export const VerseCard = ({
         )}
 
         {/* English Block */}
-        {(languageMode === 'both' || languageMode === 'he' || languageMode === 'en') && (
+        {(languageMode === 'both' || languageMode === 'en') && (
           <div className="flex gap-6 items-start" dir="ltr">
             <span className={`text-sm font-sans tabular-nums font-medium pt-1.5 shrink-0 min-w-8 text-left transition-colors ${active || isHovered ? 'text-indigo-500' : 'text-slate-400 dark:text-slate-500'}`}>
               {verseNumber}
