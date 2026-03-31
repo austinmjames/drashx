@@ -34,6 +34,7 @@ export default function RootLayout({
         {children}
         {/* The BroadcastModal handles its own visibility logic and data fetching */}
         <BroadcastModal />
+        <Analytics />
       </body>
     </html>
   );
