@@ -95,6 +95,25 @@ export const AddCommentForm = ({
     applyFormat('fontSize', size);
   };
 
+  // Ensure entering the editor clears any bleeding tags from the title
+  const handleEditorFocus = () => {
+    if (editorRef.current) {
+      const isEmpty = editorRef.current.innerHTML.replace(/<[^>]*>?/gm, '').trim().length === 0;
+      if (isEmpty) {
+        document.execCommand('fontSize', false, '3');
+      }
+    }
+    checkFormats();
+  };
+
+  // Jump to content on Enter, prevent multi-line titles
+  const handleTitleKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      editorRef.current?.focus();
+    }
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     const strippedContent = content.replace(/<[^>]*>?/gm, '').trim();
@@ -218,6 +237,7 @@ export const AddCommentForm = ({
               contentEditable
               dir="auto"
               onInput={(e) => setTitle(e.currentTarget.innerHTML)}
+              onKeyDown={handleTitleKeyDown}
               className="w-full bg-transparent text-lg md:text-xl font-black text-slate-900 dark:text-white border-b border-transparent focus:border-indigo-500/30 transition-all pb-2 font-serif min-h-[1.5em]"
             />
           </div>
@@ -241,7 +261,7 @@ export const AddCommentForm = ({
             }}
             onKeyUp={checkFormats}
             onMouseUp={checkFormats}
-            onFocus={checkFormats}
+            onFocus={handleEditorFocus}
             className={`w-full flex-1 bg-transparent border-none focus:ring-0 outline-none text-slate-700 dark:text-slate-200 leading-relaxed [&_b]:font-bold [&_i]:italic [&_u]:underline ${isExpanded ? 'text-lg' : 'text-sm'}`}
           />
         </div>
