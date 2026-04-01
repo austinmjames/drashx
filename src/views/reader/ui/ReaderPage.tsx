@@ -64,25 +64,17 @@ export const ReaderPage = ({ bookName, chapterNumber }: { bookName?: string; cha
   const [selectedStrongs, setSelectedStrongs] = useState<string | null>(null);
 
   // --- Navigation Support: Scrolling Logic ---
-  
-  /**
-   * Smoothly scrolls to a specific verse and selects it.
-   */
   const scrollToVerse = useCallback((vNum: number) => {
-    // Small timeout to ensure the DOM elements have rendered
     setTimeout(() => {
       const element = document.getElementById(`verse-${vNum}`);
       if (element) {
         element.scrollIntoView({ behavior: 'smooth', block: 'start' });
-        
-        // Find the verse object to update selection and insights
         const verseObj = verses.find(v => (v.verse_num || v.verse_number) === vNum);
         if (verseObj) setSelectedVerse(verseObj);
       }
     }, 150);
   }, [verses]);
 
-  // Check for ?v= parameter on load or change
   useEffect(() => {
     const vParam = searchParams.get('v');
     if (vParam && !isLoading && verses.length > 0) {
@@ -90,25 +82,20 @@ export const ReaderPage = ({ bookName, chapterNumber }: { bookName?: string; cha
     }
   }, [searchParams, isLoading, verses, scrollToVerse]);
 
-  // Listen for custom 'reader-jump-to-verse' events from Lexicon/Comments
   useEffect(() => {
     const handleJumpEvent = (e: Event) => {
       const customEvent = e as CustomEvent<{ book: string; chapter: number; verse: number }>;
       const { book, chapter, verse } = customEvent.detail;
       const currentBook = decodeURIComponent(activeBook);
-      
-      // If we are already on the correct page, scroll immediately.
       if (currentBook === book && activeChapter === chapter) {
         scrollToVerse(verse);
       }
     };
-
     window.addEventListener('reader-jump-to-verse', handleJumpEvent);
     return () => window.removeEventListener('reader-jump-to-verse', handleJumpEvent);
   }, [activeBook, activeChapter, scrollToVerse]);
 
   // --- Existing Logic ---
-
   useEffect(() => {
     if (typeof window !== 'undefined' && window.innerWidth < 768) {
       setIsSidebarOpen(false);
@@ -190,6 +177,8 @@ export const ReaderPage = ({ bookName, chapterNumber }: { bookName?: string; cha
         const { data: bookData } = await supabase.from('books').select('*').ilike('name_en', cleanBookName).single();
         if (!bookData) throw new Error(`Book "${cleanBookName}" not found.`);
         setHebrewTitle(bookData.name_he);
+        
+        // Fetch from reader_verses_view (which should now include latest_comment_at)
         const { data: versesData } = await supabase.from('reader_verses_view').select('*').eq('book_id', bookData.name_en).eq('chapter_num', activeChapter).order('verse_num', { ascending: true });
         setVerses((versesData || []) as Verse[]);
       } catch (err: unknown) { 
@@ -208,7 +197,9 @@ export const ReaderPage = ({ bookName, chapterNumber }: { bookName?: string; cha
         <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-30 md:hidden animate-in fade-in" onClick={() => setIsSidebarOpen(false)} />
       )}
       <aside className={`absolute md:relative z-40 h-full flex flex-col bg-slate-50 dark:bg-slate-900/30 border-r border-slate-200 dark:border-slate-800 transition-all duration-300 ease-in-out ${isSidebarOpen ? 'translate-x-0 w-72 shadow-2xl md:shadow-none' : '-translate-x-full md:translate-x-0 w-72 md:w-0 md:opacity-0 md:pointer-events-none'}`}>
-        <div className="flex-1 overflow-y-auto w-72"><TableOfContents /></div>
+        <div className="flex-1 overflow-y-auto w-72">
+          <TableOfContents userId={user?.id} groupId={activeGroupId} />
+        </div>
         <div className="p-4 border-t border-slate-200 dark:border-slate-800 w-72">
           <button onClick={() => user ? setShowProfile(true) : setShowAuth(true)} className="w-full flex items-center justify-center gap-2 py-3 bg-slate-200 dark:bg-slate-800 rounded-xl text-sm font-bold transition-transform active:scale-95"><UserIcon size={16} /> {user ? 'My Profile' : 'Sign In'}</button>
         </div>
@@ -229,7 +220,6 @@ export const ReaderPage = ({ bookName, chapterNumber }: { bookName?: string; cha
           <div className="max-w-3xl mx-auto py-6 md:py-8 w-full flex-1 md:px-6">
             {isLoading ? <div className="space-y-4">{[...Array(6)].map((_, i) => <VerseSkeleton key={i} />)}</div> : fetchError ? <div className="flex flex-col items-center justify-center h-64 text-rose-500 gap-4"><AlertCircle size={48}/><p>{fetchError}</p></div> : 
               verses.map((v) => (
-                // Added ID and scroll-mt to support jump-to-verse navigation
                 <div key={v.verse_id || v.id} id={`verse-${v.verse_num || v.verse_number}`} className="scroll-mt-24">
                   <VerseCard 
                     verse={v} 
@@ -237,6 +227,8 @@ export const ReaderPage = ({ bookName, chapterNumber }: { bookName?: string; cha
                     languageMode={languageMode} hebrewStyle={hebrewStyle} translation={translation} 
                     onClick={() => { setSelectedVerse(v); setIsInsightsOpen(true); }}
                     onWordClick={setSelectedStrongs} 
+                    groupId={activeGroupId}
+                    userId={user?.id || null}
                   />
                 </div>
               ))

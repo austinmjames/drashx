@@ -1,15 +1,9 @@
 // Path: src/widgets/comment-threads/ui/CommentThread.tsx
-import React, { useEffect, useState, useCallback, useRef } from 'react';
+import React, { useEffect, useState, useCallback, useRef, useMemo } from 'react';
 import { supabase } from '../../../shared/api/supabase';
 import { CommentItem, Comment } from '../../../entities/comment/ui/CommentItem';
 import { AddCommentForm } from '../../../features/comments/add-comment/ui/AddCommentForm';
-
-interface CommentThreadProps {
-  verseId: string | number;
-  groupId?: string; 
-  referenceLabel?: string; 
-  currentUserId?: string; 
-}
+import { CommentSortSelect, CommentSortOption } from '../../../features/comments/sort-comments/ui/CommentSortSelect';
 
 interface Profile {
   username: string;
@@ -17,12 +11,24 @@ interface Profile {
   avatar_url?: string;
 }
 
-// Extend the base Comment type to include the joined profiles and likes
 interface ThreadComment extends Omit<Comment, 'profiles'> {
   profiles: Profile;
+  title?: string;
   likes?: { user_id: string }[];
   user_has_liked?: boolean;
   likes_count?: number;
+  
+  reply_count?: number;
+  latest_reply_at?: string | null;
+  isNew?: boolean;
+  hasNewReplies?: boolean;
+}
+
+interface CommentThreadProps {
+  verseId: string | number;
+  groupId?: string; 
+  referenceLabel?: string; 
+  currentUserId?: string; 
 }
 
 export const CommentThread = ({ verseId, groupId, referenceLabel, currentUserId: propUserId }: CommentThreadProps) => {
@@ -34,9 +40,13 @@ export const CommentThread = ({ verseId, groupId, referenceLabel, currentUserId:
   const [expandedThreads, setExpandedThreads] = useState<Set<string>>(new Set());
   const [showResolvedFor, setShowResolvedFor] = useState<Set<string>>(new Set());
   
-  const [isLoading, setIsLoading] = useState(true);
+  const [loading, setLoading] = useState(true);
+  const [sortOption, setSortOption] = useState<CommentSortOption>('newest');
+  const [lastReadAt, setLastReadAt] = useState<Date | null>(null);
+  
   const isInitialMount = useRef(true);
 
+  // 1. Resolve Session User
   useEffect(() => {
     if (!currentUserId) {
       supabase.auth.getSession().then(({ data: { session } }) => {
@@ -45,55 +55,51 @@ export const CommentThread = ({ verseId, groupId, referenceLabel, currentUserId:
     }
   }, [currentUserId]);
 
+  // 2. Fetch Read Receipt for Unread Status
+  useEffect(() => {
+    const fetchReadReceipt = async () => {
+      if (!currentUserId) return;
+      let query = supabase.from('verse_read_receipts').select('last_read_at').eq('user_id', currentUserId).eq('verse_id', String(verseId));
+      if (groupId) query = query.eq('group_id', groupId);
+      else query = query.is('group_id', null);
+
+      const { data } = await query.maybeSingle();
+      if (data?.last_read_at) setLastReadAt(new Date(data.last_read_at));
+      else setLastReadAt(new Date(0));
+    };
+    fetchReadReceipt();
+  }, [verseId, groupId, currentUserId]);
+
+  // 3. Fetch Full Thread Data
   const fetchThread = useCallback(async (showLoading = true) => {
     if (verseId === undefined || verseId === null) return; 
-    if (showLoading) setIsLoading(true);
+    if (showLoading) setLoading(true);
     
-    // Determine context: Personal mode (groupId === currentUserId) or Group mode
     const isPersonal = groupId === currentUserId;
-
-    // FIX: Strictly parse the verseId to an integer to match your database schema
     const numericVerseId = typeof verseId === 'string' ? parseInt(verseId, 10) : verseId;
 
-    /**
-     * CRITICAL FIX: DISAMBIGUATION
-     * ---------------------------
-     * 1. profiles:profiles!user_id resolves ambiguity between comments and profiles.
-     * 2. likes:likes!comment_id (assuming comment_id is the FK) prevents ambiguity in the likes table.
-     */
     let query = supabase
       .from('comments')
       .select(`
         *,
-        profiles:profiles!user_id ( 
-          username, 
-          display_name, 
-          avatar_url 
-        ),
+        profiles:profiles!user_id ( username, display_name, avatar_url ),
         likes:likes!comment_id ( user_id )
       `)
       .eq('verse_id', numericVerseId)
       .order('created_at', { ascending: true });
 
-    if (isPersonal) {
-      query = query.is('group_id', null).eq('user_id', currentUserId);
-    } else if (groupId) {
-      query = query.eq('group_id', groupId);
-    } else {
-      query = query.is('group_id', null);
-    }
+    if (isPersonal) query = query.is('group_id', null).eq('user_id', currentUserId);
+    else if (groupId) query = query.eq('group_id', groupId);
+    else query = query.is('group_id', null);
 
     const { data, error } = await query;
 
     if (error) {
       console.error("Fetch failed:", error.message);
-      // FIX: Clear the old comments out if the fetch fails (or if the group has an error)
-      // This prevents the "stuck on last populated group" bug.
       setComments([]);
     } else if (data) {
       const formattedComments = data.map((c) => ({
         ...c,
-        // FIX: Ensure profiles array is normalized so it never causes [object Object] bugs
         profiles: Array.isArray(c.profiles) ? c.profiles[0] : c.profiles,
         likes_count: c.likes?.length || 0,
         user_has_liked: c.likes?.some((l: { user_id: string }) => l.user_id === currentUserId) || false
@@ -101,15 +107,15 @@ export const CommentThread = ({ verseId, groupId, referenceLabel, currentUserId:
       setComments(formattedComments as unknown as ThreadComment[]);
     }
     
-    setIsLoading(false);
+    setLoading(false);
   }, [verseId, groupId, currentUserId]);
 
+  // 4. Initialization & Realtime
   useEffect(() => {
     if (verseId === undefined || verseId === null || !currentUserId) return;
     fetchThread(isInitialMount.current);
     isInitialMount.current = false;
     
-    // FIX: Cast verseId to integer here as well so the Realtime filter successfully matches the DB column
     const numericVerseId = typeof verseId === 'string' ? parseInt(verseId, 10) : verseId;
 
     const channel = supabase.channel(`verse-${numericVerseId}`)
@@ -124,24 +130,97 @@ export const CommentThread = ({ verseId, groupId, referenceLabel, currentUserId:
     return () => { supabase.removeChannel(channel); };
   }, [verseId, groupId, currentUserId, fetchThread]);
 
+  const handleMarkRead = async () => {
+    if (!currentUserId || !verseId) return;
+    // Mark the whole verse context as read when a user interacts with a comment
+    await supabase.rpc('mark_verse_as_read', {
+      p_user_id: currentUserId,
+      p_verse_id: String(verseId),
+      p_group_id: groupId || null
+    });
+  };
+
+  // 5. Compute Thread Stats & Sort Top-Level Roots
+  const { rootComments, enrichedComments } = useMemo(() => {
+    const getDescendants = (parentId: string): ThreadComment[] => {
+      const children = comments.filter(c => c.parent_id === parentId);
+      let all = [...children];
+      children.forEach(c => { all = all.concat(getDescendants(c.id)); });
+      return all;
+    };
+
+    const enriched = comments.map(c => {
+      const descendants = getDescendants(c.id);
+      // Ensure we don't flag our own comments as "Brand New"
+      const isBrandNew = lastReadAt && new Date(c.created_at) > lastReadAt && c.user_id !== currentUserId;
+      const latest_reply_at = descendants.length > 0 
+        ? descendants.reduce((max, desc) => new Date(desc.created_at) > new Date(max) ? desc.created_at : max, c.created_at)
+        : null;
+      const hasNewReplies = !isBrandNew && lastReadAt && latest_reply_at && new Date(latest_reply_at) > lastReadAt;
+
+      return {
+        ...c,
+        reply_count: descendants.length,
+        latest_reply_at,
+        isNew: !!isBrandNew,
+        hasNewReplies: !!hasNewReplies
+      };
+    });
+
+    const roots = enriched.filter(c => c.parent_id === null).sort((a, b) => {
+      const aIsUnread = a.isNew || a.hasNewReplies;
+      const bIsUnread = b.isNew || b.hasNewReplies;
+
+      if (aIsUnread && !bIsUnread) return -1;
+      if (!aIsUnread && bIsUnread) return 1;
+
+      switch (sortOption) {
+        case 'newest': 
+          return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
+        case 'oldest': 
+          return new Date(a.created_at).getTime() - new Date(b.created_at).getTime();
+        case 'most_liked': 
+          return (b.likes_count || 0) - (a.likes_count || 0);
+        case 'recent_reply': {
+          const aLatest = Math.max(new Date(a.created_at).getTime(), a.latest_reply_at ? new Date(a.latest_reply_at).getTime() : 0);
+          const bLatest = Math.max(new Date(b.created_at).getTime(), b.latest_reply_at ? new Date(b.latest_reply_at).getTime() : 0);
+          return bLatest - aLatest;
+        }
+        case 'most_activity': {
+          const aActivity = (a.likes_count || 0) + (a.reply_count || 0);
+          const bActivity = (b.likes_count || 0) + (b.reply_count || 0);
+          return bActivity - aActivity;
+        }
+        default: 
+          return 0;
+      }
+    });
+
+    return { rootComments: roots, enrichedComments: enriched };
+  }, [comments, lastReadAt, sortOption, currentUserId]);
+
+  // 6. Recursive Tree Rendering
   const renderTree = (parentId: string | null = null, depth: number = 0) => {
-    const allChildren = comments.filter(c => c.parent_id === parentId);
-    const visibleChildren = allChildren.filter(c => {
+    const children = parentId === null 
+      ? rootComments 
+      : enrichedComments.filter(c => c.parent_id === parentId);
+    
+    const visibleChildren = children.filter(c => {
       if (c.is_resolved) return parentId === null ? true : showResolvedFor.has(parentId);
       return parentId === null ? true : expandedThreads.has(parentId);
     });
 
     if (visibleChildren.length === 0 && parentId !== null) return null;
 
-    const containerClass = parentId ? "mt-3" : "space-y-12 pt-6";
+    const containerClass = parentId ? "mt-3" : "space-y-6 pt-4";
 
     return (
       <div className={containerClass}>
         {visibleChildren.map((comment) => {
           const isExpanded = expandedThreads.has(comment.id);
           const isShowingResolved = showResolvedFor.has(comment.id);
-          const activeChildCount = comments.filter(c => c.parent_id === comment.id && !c.is_resolved).length;
-          const resolvedChildCount = comments.filter(c => c.parent_id === comment.id && c.is_resolved).length;
+          const activeChildCount = enrichedComments.filter(c => c.parent_id === comment.id && !c.is_resolved).length;
+          const resolvedChildCount = enrichedComments.filter(c => c.parent_id === comment.id && c.is_resolved).length;
           const hasVisibleChildren = (activeChildCount > 0 && isExpanded) || (resolvedChildCount > 0 && isShowingResolved);
           
           if (editingId === comment.id) {
@@ -154,6 +233,7 @@ export const CommentThread = ({ verseId, groupId, referenceLabel, currentUserId:
                   isEditMode={true} 
                   commentId={comment.id} 
                   initialContent={comment.content} 
+                  initialTitle={comment.title} 
                   onCancel={() => setEditingId(null)} 
                   onSuccess={() => { setEditingId(null); fetchThread(false); }} 
                 />
@@ -163,10 +243,8 @@ export const CommentThread = ({ verseId, groupId, referenceLabel, currentUserId:
 
           let replyingToName;
           if (depth > 0 && comment.parent_id) {
-            const parentComment = comments.find(c => c.id === comment.parent_id);
-            if (parentComment?.profiles) {
-              replyingToName = parentComment.profiles.display_name || parentComment.profiles.username;
-            }
+            const parentComment = enrichedComments.find(c => c.id === comment.parent_id);
+            replyingToName = parentComment?.profiles?.display_name || parentComment?.profiles?.username;
           }
 
           return (
@@ -175,6 +253,8 @@ export const CommentThread = ({ verseId, groupId, referenceLabel, currentUserId:
                 comment={comment as unknown as Comment} 
                 currentUserId={currentUserId || undefined} 
                 replyingToName={replyingToName} 
+                isNew={comment.isNew}
+                hasNewReplies={comment.hasNewReplies && depth === 0}
                 onReplyClick={() => setReplyTo(replyTo === comment.id ? null : comment.id)} 
                 onEditClick={() => setEditingId(comment.id)} 
                 onDeleteClick={async () => {
@@ -189,26 +269,26 @@ export const CommentThread = ({ verseId, groupId, referenceLabel, currentUserId:
                 }} 
                 onLikeClick={async () => {
                   if (!currentUserId) return; 
-                  const isLiking = !comment.user_has_liked;
                   try {
-                    if (isLiking) await supabase.from('likes').insert({ comment_id: comment.id, user_id: currentUserId });
+                    if (!comment.user_has_liked) await supabase.from('likes').insert({ comment_id: comment.id, user_id: currentUserId });
                     else await supabase.from('likes').delete().eq('comment_id', comment.id).eq('user_id', currentUserId);
                     fetchThread(false);
                   } catch { fetchThread(false); }
                 }} 
+                onRead={handleMarkRead}
                 replyCount={activeChildCount} 
                 isExpanded={isExpanded} 
                 onToggleReplies={() => setExpandedThreads(prev => { 
-                  const n = new Set(prev); 
-                  if (n.has(comment.id)) n.delete(comment.id); 
-                  else n.add(comment.id); 
+                  const n = new Set(prev);
+                  if (n.has(comment.id)) n.delete(comment.id);
+                  else n.add(comment.id);
                   return n; 
                 })} 
                 resolvedCount={resolvedChildCount} 
                 onToggleResolved={() => setShowResolvedFor(prev => { 
-                  const n = new Set(prev); 
-                  if (n.has(comment.id)) n.delete(comment.id); 
-                  else n.add(comment.id); 
+                  const n = new Set(prev);
+                  if (n.has(comment.id)) n.delete(comment.id);
+                  else n.add(comment.id);
                   return n; 
                 })} 
                 isResolvedExpanded={isShowingResolved} 
@@ -239,7 +319,7 @@ export const CommentThread = ({ verseId, groupId, referenceLabel, currentUserId:
 
   if (verseId === undefined || verseId === null) return null;
 
-  if (isLoading) {
+  if (loading) {
     return (
       <div className="space-y-6 pt-4 px-2">
         {[1, 2, 3].map(i => (
@@ -262,6 +342,18 @@ export const CommentThread = ({ verseId, groupId, referenceLabel, currentUserId:
           <h2 className="text-xs font-black uppercase tracking-widest text-indigo-500">{referenceLabel}</h2>
         </div>
       )}
+      
+      {comments.length > 0 && (
+        <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-3 mt-4 mb-2 mx-2">
+          <h3 className="text-[10px] font-black uppercase tracking-widest text-slate-400">
+            Discussions ({rootComments.length})
+          </h3>
+          {rootComments.length > 1 && (
+            <CommentSortSelect value={sortOption} onChange={setSortOption} />
+          )}
+        </div>
+      )}
+
       {comments.length === 0 ? (
         <div className="text-center py-12 px-4 bg-white/50 dark:bg-slate-900/20 rounded-2xl border border-dashed border-slate-200 dark:border-slate-800 mx-2 mt-4">
           <p className="text-slate-400 text-xs italic">No commentary yet. Be the first to share an insight.</p>

@@ -1,4 +1,6 @@
 // Path: src/entities/comment/ui/CommentItem.tsx
+"use client";
+
 import React, { useState, useRef, useEffect, useMemo } from 'react';
 import Image from 'next/image';
 import { Reply, Edit2, Trash2, CheckCircle2, MoreVertical, Heart, MessageCircle, ChevronDown, ChevronUp, User } from 'lucide-react';
@@ -15,6 +17,7 @@ export interface ProfileData {
 
 export interface Comment {
   id: string;
+  title?: string;
   content: string;
   created_at: string;
   user_id: string;
@@ -36,13 +39,33 @@ interface CommentItemProps {
   onDeleteClick?: () => void;
   onResolveClick?: () => void;
   onLikeClick?: () => void;
+  onRead?: () => void; // New prop to signal the comment has been "seen"
   replyCount?: number;
   onToggleReplies?: () => void;
   isExpanded?: boolean;
   resolvedCount?: number;
   onToggleResolved?: () => void;
   isResolvedExpanded?: boolean;
+  isNew?: boolean;
+  hasNewReplies?: boolean;
 }
+
+const processScaledText = (text: string | undefined) => {
+  if (!text) return null;
+  let cleanText = text;
+  if (typeof document !== 'undefined') {
+    const doc = new DOMParser().parseFromString(text, 'text/html');
+    cleanText = doc.documentElement.textContent || text;
+  }
+  cleanText = cleanText.trim();
+  const parts = cleanText.split(/([\u0590-\u05FF]+)/g);
+  return parts.map((part, i) => {
+    if (/[\u0590-\u05FF]/.test(part)) {
+      return <span key={i} className="inline-block scale-[1.5] origin-bottom px-0.5 font-serif leading-none mx-0.5">{part}</span>;
+    }
+    return <span key={i}>{part}</span>;
+  });
+};
 
 export const CommentItem = ({
   comment,
@@ -53,71 +76,81 @@ export const CommentItem = ({
   onDeleteClick,
   onResolveClick,
   onLikeClick,
+  onRead,
   replyCount,
   onToggleReplies,
   isExpanded,
   resolvedCount,
   onToggleResolved,
-  isResolvedExpanded
+  isResolvedExpanded,
+  isNew,
+  hasNewReplies
 }: CommentItemProps) => {
   const router = useRouter();
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [isTextExpanded, setIsTextExpanded] = useState(false);
   const [isContainerHovered, setIsContainerHovered] = useState(false); 
-  const [hoveredIcon, setHoveredIcon] = useState<string | null>(null);
+  const [isOptimisticallyRead, setIsOptimisticallyRead] = useState(false);
   const [imgError, setImgError] = useState(false);
   
   const menuRef = useRef<HTMLDivElement>(null);
-  
   const isAuthor = currentUserId === comment.user_id;
   const profile = Array.isArray(comment.profiles) ? comment.profiles[0] : comment.profiles;
   const displayName = profile?.display_name || profile?.username || 'Anonymous';
   const initial = displayName.substring(0, 2).toUpperCase();
 
-  // --- Avatar Logic (FIXED) ---
+  // --- Avatar Logic ---
   const avatarUrl = profile?.avatar_url;
   let isSystemAvatar = false;
   let CustomIconComp: React.ElementType = User;
-  let avatarBgClass = ''; // Reverted to className implementation 
+  let avatarBgClass = ''; 
   let avatarTextClass = 'text-indigo-600 dark:text-indigo-400 font-black';
 
   if (avatarUrl && avatarUrl.includes(':') && !avatarUrl.startsWith('http')) {
     isSystemAvatar = true;
     const [colorId, iconId] = avatarUrl.split(':');
-    
     const colorObj = PROFILE_COLORS.find(c => c.id === colorId);
     if (colorObj) {
-      avatarBgClass = colorObj.hex; // Injects tailwind classes like 'bg-purple-500'
+      avatarBgClass = colorObj.hex; 
       avatarTextClass = 'text-white';
     }
-    
     const foundIcon = ALL_AVATAR_ICONS.find(i => i.id === iconId)?.icon;
     if (foundIcon) CustomIconComp = foundIcon;
   }
 
   const isExternalImage = avatarUrl && avatarUrl.startsWith('http') && !imgError;
 
-  const handleReferenceJump = (book: string, chapter: number, verse: number) => {
-    router.push(getVersePath(book, chapter, verse));
+  // --- Read Status Logic ---
+  // If user clicks anywhere on the comment, mark as read and hide badges
+  const handleInteraction = () => {
+    if ((isNew || hasNewReplies) && !isOptimisticallyRead) {
+      setIsOptimisticallyRead(true);
+      onRead?.();
+    }
   };
 
-  const strippedContent = useMemo(() => {
-    return comment.content.replace(/<[^>]*>?/gm, '');
-  }, [comment.content]);
+  const showNewBadge = isNew && !isOptimisticallyRead;
+  const showNewRepliesBadge = hasNewReplies && !isOptimisticallyRead;
 
-  const needsTruncation = strippedContent.length > 250;
+  // --- Truncation Logic ---
+  const MAX_CHARS = 250;
+  const strippedContent = useMemo(() => comment.content.replace(/<[^>]*>?/gm, ''), [comment.content]);
+  const needsTruncation = strippedContent.length > MAX_CHARS;
+  
+  const contentToRender = useMemo(() => {
+    if (!needsTruncation || isTextExpanded) return comment.content;
+    return strippedContent.slice(0, MAX_CHARS).trim() + '...';
+  }, [comment.content, strippedContent, isTextExpanded, needsTruncation]);
 
   const relativeTimestamp = useMemo(() => {
     const now = new Date();
     const created = new Date(comment.created_at);
     const diffInMs = Math.max(0, now.getTime() - created.getTime());
-    
     const mins = Math.floor(diffInMs / (1000 * 60));
     const hours = Math.floor(diffInMs / (1000 * 60 * 60));
     const days = Math.floor(diffInMs / (1000 * 60 * 60 * 24));
     const months = Math.floor(days / 30.44);
     const years = Math.floor(days / 365.25);
-
     if (mins < 60) return `${mins}m`;
     if (hours < 24) return `${hours}h`;
     if (days < 60) return `${days}d`;
@@ -127,9 +160,7 @@ export const CommentItem = ({
 
   useEffect(() => {
     const handleClickOutside = (e: MouseEvent) => {
-      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
-        setIsMenuOpen(false);
-      }
+      if (menuRef.current && !menuRef.current.contains(e.target as Node)) setIsMenuOpen(false);
     };
     if (isMenuOpen) document.addEventListener('mousedown', handleClickOutside);
     return () => document.removeEventListener('mousedown', handleClickOutside);
@@ -142,85 +173,44 @@ export const CommentItem = ({
 
   return (
     <div 
-      onMouseEnter={() => setIsContainerHovered(true)}
-      onMouseLeave={() => setIsContainerHovered(false)}
-      className={`relative flex flex-col gap-1.5 pointer-events-auto isolate transition-all duration-200 ${
-        isResolved ? resolvedClasses : (comment.parent_id ? nestedClasses : rootClasses)
-      } ${isContainerHovered || isMenuOpen ? 'z-50' : 'z-auto'}`}
+      onMouseEnter={() => setIsContainerHovered(true)} 
+      onMouseLeave={() => setIsContainerHovered(false)} 
+      onClick={handleInteraction}
+      className={`relative flex flex-col gap-1.5 transition-all duration-200 cursor-default ${isResolved ? resolvedClasses : (comment.parent_id ? nestedClasses : rootClasses)} ${isContainerHovered || isMenuOpen ? 'z-50' : 'z-auto'}`}
     >
+      
       <div className="flex items-center justify-between gap-2">
         <div className="flex items-center gap-1.5 flex-wrap min-w-0">
-          
-          {/* Avatar Rendering Fixed: Using className instead of style */}
-          <div 
-            className={`w-6 h-6 rounded-full flex items-center justify-center shrink-0 overflow-hidden border border-white dark:border-slate-800 transition-colors ${avatarBgClass || 'bg-indigo-100 dark:bg-indigo-900/50'} ${avatarTextClass}`}
-          >
+          <div className={`w-6 h-6 rounded-full flex items-center justify-center shrink-0 overflow-hidden border border-white dark:border-slate-800 transition-colors ${avatarBgClass || 'bg-indigo-100 dark:bg-indigo-900/50'} ${avatarTextClass}`}>
             {isExternalImage ? (
-              <Image 
-                src={avatarUrl} 
-                alt={displayName} 
-                width={24} 
-                height={24} 
-                className="w-full h-full object-cover"
-                onError={() => setImgError(true)}
-              />
+              <Image src={avatarUrl as string} alt={displayName} width={24} height={24} className="w-full h-full object-cover" onError={() => setImgError(true)} />
             ) : isSystemAvatar ? (
               <CustomIconComp size={14} strokeWidth={2.5} />
             ) : (
               <span className="text-[10px] font-black select-none">{initial}</span>
             )}
           </div>
-          
-          <span className={`text-xs font-bold truncate ${isResolved ? 'text-blue-50' : 'text-slate-900 dark:text-slate-100'}`}>
-            {displayName}
-          </span>
-          
+          <span className={`text-xs font-bold truncate ${isResolved ? 'text-blue-50' : 'text-slate-900 dark:text-slate-100'}`}>{displayName}</span>
           {replyingToName && (
-            <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded flex items-center gap-1 shrink-0 ${
-              isResolved ? 'bg-blue-700/50 text-blue-100' : 'bg-slate-100 dark:bg-slate-800 text-slate-500'
-            }`}>
+            <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded flex items-center gap-1 shrink-0 ${isResolved ? 'bg-blue-700/50 text-blue-100' : 'bg-slate-100 dark:bg-slate-800 text-slate-500'}`}>
               <Reply size={8} className="rotate-180" /> {replyingToName}
             </span>
           )}
-          
-          <span className={`text-[9px] font-medium shrink-0 ${isResolved ? 'text-blue-200/80' : 'text-slate-400'}`}>
-            {relativeTimestamp}
-          </span>
+          <span className={`text-[9px] font-medium shrink-0 ${isResolved ? 'text-blue-200/80' : 'text-slate-400'}`}>{relativeTimestamp}</span>
         </div>
 
         <div className="flex items-center gap-1 shrink-0">
-          {isResolved && (
-            <span title="Resolved" className="flex items-center text-blue-300 mr-1">
-              <CheckCircle2 size={16} />
-            </span>
-          )}
-
+          {showNewBadge && <span className="text-[9px] font-black uppercase tracking-widest px-1.5 py-0.5 rounded bg-blue-100 dark:bg-blue-900/40 text-blue-600 dark:text-blue-400 mr-1 animate-in fade-in zoom-in-75">New</span>}
+          {showNewRepliesBadge && <span className="text-[9px] font-black uppercase tracking-widest px-1.5 py-0.5 rounded bg-emerald-100 dark:bg-emerald-900/40 text-emerald-600 dark:text-emerald-400 mr-1 animate-in fade-in zoom-in-75">New Replies</span>}
+          {isResolved && <span className="flex items-center text-blue-300 mr-1"><CheckCircle2 size={16} /></span>}
           {isAuthor && (
             <div className="relative" ref={menuRef}>
-              <button 
-                onClick={(e) => { e.stopPropagation(); setIsMenuOpen(!isMenuOpen); }} 
-                className={`flex items-center justify-center p-1 transition-all duration-200 outline-none ${
-                  isContainerHovered || isMenuOpen ? 'opacity-100' : 'opacity-0'
-                } ${isResolved ? 'text-white' : isMenuOpen ? 'text-slate-900 dark:text-white' : 'text-slate-500'}`}
-                title="Options"
-              >
-                <MoreVertical size={18} />
-              </button>
-
+              <button onClick={(e) => { e.stopPropagation(); setIsMenuOpen(!isMenuOpen); }} className={`flex items-center justify-center p-1 transition-all duration-200 outline-none ${isContainerHovered || isMenuOpen ? 'opacity-100' : 'opacity-0'} ${isResolved ? 'text-white' : isMenuOpen ? 'text-slate-900 dark:text-white' : 'text-slate-500'}`} aria-label="Comment options"><MoreVertical size={18} /></button>
               {isMenuOpen && (
                 <div className="absolute right-0 mt-1 w-32 bg-white dark:bg-slate-950 rounded-xl shadow-xl border border-slate-200 dark:border-slate-800 z-50 py-1 animate-in fade-in zoom-in-95 duration-200">
-                  <button onClick={(e) => { e.stopPropagation(); onEditClick?.(); setIsMenuOpen(false); }} className="w-full flex items-center gap-2 px-3 py-1.5 text-xs font-medium text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800/50 transition-colors text-left">
-                    <Edit2 size={14} /> Edit
-                  </button>
-                  {comment.parent_id && (
-                    <button onClick={(e) => { e.stopPropagation(); onResolveClick?.(); setIsMenuOpen(false); }} className="w-full flex items-center gap-2 px-3 py-1.5 text-xs font-medium text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800/50 transition-colors text-left">
-                      <CheckCircle2 size={14} className={comment.is_resolved ? "text-blue-500" : ""} /> 
-                      {comment.is_resolved ? 'Unresolve' : 'Resolve'}
-                    </button>
-                  )}
-                  <button onClick={(e) => { e.stopPropagation(); onDeleteClick?.(); setIsMenuOpen(false); }} className="w-full flex items-center gap-2 px-3 py-1.5 text-xs font-medium text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors text-left">
-                    <Trash2 size={14} /> Delete
-                  </button>
+                  <button onClick={(e) => { e.stopPropagation(); onEditClick?.(); setIsMenuOpen(false); }} className="w-full flex items-center gap-2 px-3 py-1.5 text-xs font-medium text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800/50 text-left transition-colors"><Edit2 size={14} /> Edit</button>
+                  {comment.parent_id && <button onClick={(e) => { e.stopPropagation(); onResolveClick?.(); setIsMenuOpen(false); }} className="w-full flex items-center gap-2 px-3 py-1.5 text-xs font-medium text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800/50 text-left transition-colors"><CheckCircle2 size={14} className={comment.is_resolved ? "text-blue-500" : ""} /> {comment.is_resolved ? 'Unresolve' : 'Resolve'}</button>}
+                  <button onClick={(e) => { e.stopPropagation(); onDeleteClick?.(); setIsMenuOpen(false); }} className="w-full flex items-center gap-2 px-3 py-1.5 text-xs font-medium text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20 text-left transition-colors"><Trash2 size={14} /> Delete</button>
                 </div>
               )}
             </div>
@@ -229,25 +219,23 @@ export const CommentItem = ({
       </div>
 
       <div className="relative">
-        <div className={`text-sm leading-relaxed pr-2 transition-all ${
-          isResolved ? 'text-white' : 'text-slate-700 dark:text-slate-300'
-        } ${!isTextExpanded && needsTruncation ? 'max-h-32 overflow-hidden hover:overflow-visible group-hover:overflow-visible' : ''}`}>
-          
-          {/* SmartText now has HTML parsing activated for Rich Text comment blocks */}
+        {comment.title && (
+          <h4 className={`text-base font-black mb-1.5 leading-tight tracking-tight ${isResolved ? 'text-white' : 'text-slate-900 dark:text-white'}`}>
+            {processScaledText(comment.title)}
+          </h4>
+        )}
+        <div className={`text-sm leading-relaxed pr-2 ${isResolved ? 'text-white' : 'text-slate-700 dark:text-slate-300'}`}>
           <SmartText 
-            text={comment.content} 
-            isHtml={true}
-            onReferenceClick={handleReferenceJump} 
-            className="[&_b]:font-bold [&_i]:italic [&_u]:underline"
+            text={contentToRender} 
+            isHtml={!needsTruncation || isTextExpanded} 
+            onReferenceClick={(b,c,v) => router.push(getVersePath(b,c,v))} 
+            className="[&_b]:font-bold [&_i]:italic [&_u]:underline [&_.hebrew-scale]:text-[1.4em]" 
           />
-
         </div>
         {needsTruncation && (
           <button 
-            onClick={() => setIsTextExpanded(!isTextExpanded)}
-            className={`text-[10px] font-black uppercase tracking-widest mt-1 flex items-center gap-1 ${
-              isResolved ? 'text-blue-200 hover:text-white' : 'text-indigo-500 hover:text-indigo-600'
-            }`}
+            onClick={(e) => { e.stopPropagation(); setIsTextExpanded(!isTextExpanded); }} 
+            className={`text-[10px] font-black uppercase tracking-widest mt-1 flex items-center gap-1 ${isResolved ? 'text-blue-200 hover:text-white' : 'text-indigo-500 hover:text-indigo-600'}`}
           >
             {isTextExpanded ? <><ChevronUp size={16}/> View Less</> : <><ChevronDown size={16}/> View More</>}
           </button>
@@ -255,69 +243,10 @@ export const CommentItem = ({
       </div>
 
       <div className="flex items-center gap-4 pt-1">
-        {onLikeClick && (
-          <button 
-            onClick={(e) => { e.stopPropagation(); onLikeClick(); }} 
-            onMouseEnter={() => setHoveredIcon('like')}
-            onMouseLeave={() => setHoveredIcon(null)}
-            className={`flex items-center gap-1.5 text-xs font-bold transition-all duration-200 ${
-              isResolved 
-                ? (comment.user_has_liked || hoveredIcon === 'like' ? 'text-rose-300' : 'text-blue-200')
-                : (comment.user_has_liked || hoveredIcon === 'like' ? 'text-rose-500' : 'text-slate-400')
-            }`}
-          >
-            <Heart size={16} className={comment.user_has_liked ? 'fill-current' : ''} />
-            {comment.likes_count || 0}
-          </button>
-        )}
-
-        {onReplyClick && (
-          <button 
-            onClick={(e) => { e.stopPropagation(); onReplyClick(); }} 
-            onMouseEnter={() => setHoveredIcon('reply')}
-            onMouseLeave={() => setHoveredIcon(null)}
-            className={`transition-all duration-200 ${
-              isResolved 
-                ? (hoveredIcon === 'reply' ? 'text-emerald-300' : 'text-blue-200')
-                : (hoveredIcon === 'reply' ? 'text-emerald-500' : 'text-slate-400')
-            }`} 
-            title="Reply"
-          >
-            <Reply size={16} />
-          </button>
-        )}
-
-        {onToggleReplies && replyCount !== undefined && replyCount > 0 && (
-          <button 
-            onClick={(e) => { e.stopPropagation(); onToggleReplies(); }} 
-            onMouseEnter={() => setHoveredIcon('thread')}
-            onMouseLeave={() => setHoveredIcon(null)}
-            className={`flex items-center gap-1.5 text-xs font-bold transition-all duration-200 ${
-              isResolved 
-                ? (isExpanded || hoveredIcon === 'thread' ? 'text-white' : 'text-blue-200')
-                : (isExpanded || hoveredIcon === 'thread' ? 'text-blue-500' : 'text-slate-400')
-            }`}
-          >
-            <MessageCircle size={16} className={isExpanded ? "fill-current" : ""} />
-            {replyCount}
-          </button>
-        )}
-
-        {onToggleResolved && resolvedCount !== undefined && resolvedCount > 0 && (
-          <button 
-            onClick={(e) => { e.stopPropagation(); onToggleResolved(); }} 
-            onMouseEnter={() => setHoveredIcon('resolved-list')}
-            onMouseLeave={() => setHoveredIcon(null)}
-            className={`ml-auto flex items-center gap-1.5 text-xs font-bold transition-all duration-200 px-2 py-1 rounded ${
-              isResolved
-                ? (isResolvedExpanded || hoveredIcon === 'resolved-list' ? 'bg-blue-700 text-white' : 'text-blue-200')
-                : (isResolvedExpanded || hoveredIcon === 'resolved-list' ? 'text-emerald-600 bg-emerald-50 dark:bg-emerald-500/10' : 'text-slate-400')
-            }`}
-          >
-            <CheckCircle2 size={16} className={isResolvedExpanded ? "fill-current" : ""} />
-            {resolvedCount}
-          </button>
-        )}
+        <button onClick={(e) => { e.stopPropagation(); onLikeClick?.(); }} className={`flex items-center gap-1.5 text-xs font-bold transition-all duration-200 ${isResolved ? (comment.user_has_liked ? 'text-rose-300' : 'text-blue-200') : (comment.user_has_liked ? 'text-rose-500' : 'text-slate-400')}`} aria-label="Like"><Heart size={16} className={comment.user_has_liked ? 'fill-current' : ''} /> {comment.likes_count || 0}</button>
+        <button onClick={(e) => { e.stopPropagation(); onReplyClick?.(); }} className={`transition-all duration-200 ${isResolved ? 'text-blue-200 hover:text-emerald-300' : 'text-slate-400 hover:text-emerald-500'}`} aria-label="Reply"><Reply size={16} /></button>
+        {replyCount !== undefined && replyCount > 0 && <button onClick={(e) => { e.stopPropagation(); onToggleReplies?.(); }} className={`flex items-center gap-1.5 text-xs font-bold transition-all duration-200 ${isResolved ? (isExpanded ? 'text-white' : 'text-blue-200') : (isExpanded ? 'text-blue-500' : 'text-slate-400')}`}><MessageCircle size={16} className={isExpanded ? "fill-current" : ""} /> {replyCount}</button>}
+        {resolvedCount !== undefined && resolvedCount > 0 && <button onClick={(e) => { e.stopPropagation(); onToggleResolved?.(); }} className={`ml-auto flex items-center gap-1.5 text-xs font-bold transition-all duration-200 px-2 py-1 rounded ${isResolved ? (isResolvedExpanded ? 'bg-blue-700 text-white' : 'text-blue-200') : (isResolvedExpanded ? 'text-emerald-600 bg-emerald-50 dark:bg-emerald-500/10' : 'text-slate-400')}`}><CheckCircle2 size={16} className={isResolvedExpanded ? "fill-current" : ""} /> {resolvedCount}</button>}
       </div>
     </div>
   );

@@ -1,6 +1,9 @@
 // Path: src/entities/verse/ui/VerseCard.tsx
+"use client";
+
 import React, { useState } from 'react';
 import { HebrewVerseRenderer } from './HebrewVerseRenderer';
+import { useVerseReadStatus } from '@/features/comments/read-receipts/api/useVerseReadStatus';
 
 /**
  * Helper to convert numbers to Hebrew Gematria numerals
@@ -44,6 +47,8 @@ export interface Verse {
   text_en_jps?: string;
   text_en_modernized?: string;
   words?: VerseWord[];
+  // Metadata for the "New" badge
+  latest_comment_at?: string;
 }
 
 interface VerseCardProps {
@@ -54,6 +59,8 @@ interface VerseCardProps {
   hebrewStyle: 'niqqud' | 'no-niqqud';
   onClick?: () => void;
   onWordClick?: (strongs: string) => void;
+  groupId?: string | null; 
+  userId?: string | null;  
 }
 
 export const VerseCard = ({ 
@@ -63,16 +70,26 @@ export const VerseCard = ({
   translation,
   hebrewStyle, 
   onClick,
-  onWordClick 
+  onWordClick,
+  groupId,
+  userId
 }: VerseCardProps) => {
   const [isHovered, setIsHovered] = useState(false);
+  const [isOptimisticallyRead, setIsOptimisticallyRead] = useState(false);
+
+  // Read Receipt Hook Integration
+  const verseId = verse.verse_id || verse.id;
+  const { status, markAsRead } = useVerseReadStatus(verseId, groupId, userId);
+
+  // Derived status taking into account the local optimistic click
+  const currentStatus = isOptimisticallyRead ? 'read' : status;
 
   // 1. Resolve Hebrew Display
   const voweled = verse.text_he_voweled || verse.text_he || "";
   const consonantal = verse.text_he_consonantal || verse.text_he_no_vowels || "";
   const displayHebrew = hebrewStyle === 'niqqud' ? voweled : (consonantal || voweled);
 
-  // 2. Resolve English Translation Logic (Restored from prior code)
+  // 2. Resolve English Translation Logic
   const jps = verse.text_en_jps || verse.text_en || "";
   const modernized = verse.text_en_modernized || "";
   const displayEnglish = translation === 'modernized' ? (modernized || jps) : jps;
@@ -85,14 +102,38 @@ export const VerseCard = ({
       ? "bg-slate-50 dark:bg-slate-800/50 border-slate-200 dark:border-slate-800" 
       : "bg-transparent border-slate-200 dark:border-slate-800";
 
+  // Wrap the existing onClick to also trigger the "mark as read" logic optimistically
+  const handleCardClick = () => {
+    if (currentStatus === 'unread') {
+      setIsOptimisticallyRead(true);
+      markAsRead();
+    }
+    if (onClick) onClick();
+  };
+
   return (
     <div
-      onClick={onClick}
+      onClick={handleCardClick}
       onMouseEnter={() => setIsHovered(true)}
       onMouseLeave={() => setIsHovered(false)}
-      className={`p-6 border-b transition-all cursor-pointer group ${stateClasses}`}
+      className={`p-6 border-b transition-all cursor-pointer group relative ${stateClasses}`}
     >
-      <div className="flex flex-col gap-6">
+      {/* Read/Unread Status Indicator */}
+      {currentStatus === 'unread' ? (
+        <div 
+          className="absolute left-1.5 sm:left-2 top-7 px-1.5 py-0.5 bg-blue-500 dark:bg-blue-600 text-white text-[9px] font-black uppercase tracking-widest rounded shadow-sm shadow-blue-500/30"
+          title="Unread commentary available"
+        >
+          New
+        </div>
+      ) : currentStatus === 'read' ? (
+        <div 
+          className="absolute left-3 top-8 w-1.5 h-1.5 rounded-full bg-blue-400 shadow-[0_0_6px_rgba(96,165,250,0.4)] opacity-50 transition-all duration-300"
+          title="Commentary read"
+        />
+      ) : null}
+
+      <div className="flex flex-col gap-6 ml-2">
         
         {/* Hebrew Block */}
         {(languageMode === 'both' || languageMode === 'he') && (

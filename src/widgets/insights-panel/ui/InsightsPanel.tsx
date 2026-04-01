@@ -61,6 +61,8 @@ export const InsightsPanel = (props: InsightsPanelProps) => {
   } = props;
 
   const [viewMode, setViewMode] = useState<ViewMode>('thread');
+  const viewModeRef = useRef<ViewMode>(viewMode);
+
   const [isAddingInsight, setIsAddingInsight] = useState(false);
   const [isGroupMenuOpen, setIsGroupMenuOpen] = useState(false);
   const [myUsername, setMyUsername] = useState<string>('');
@@ -68,9 +70,15 @@ export const InsightsPanel = (props: InsightsPanelProps) => {
   // Notification States
   const [unreadMentions, setUnreadMentions] = useState(0);
   const [hasUnreadMessages, setHasUnreadMessages] = useState(false);
+  const [hasUnreadActivity, setHasUnreadActivity] = useState(false);
   
   const groupMenuRef = useRef<HTMLDivElement>(null);
   const activeVerseId = selectedVerse?.verse_id || selectedVerse?.id;
+
+  // Keep Ref in sync with state to use inside callbacks without causing re-renders
+  useEffect(() => {
+    viewModeRef.current = viewMode;
+  }, [viewMode]);
 
   // Fetch true username securely from profiles table to ensure mention detection works
   useEffect(() => {
@@ -89,40 +97,80 @@ export const InsightsPanel = (props: InsightsPanelProps) => {
   const fetchUnreadStatus = useCallback(async (isMounted: boolean) => {
     if (!user || !activeGroupId || activeGroupId === user.id) return;
     
+    // Prevent Race Condition: If the user is currently in the chat view, they are actively reading.
+    if (viewModeRef.current === 'chat') {
+      if (isMounted) {
+        setHasUnreadMessages(false);
+        setUnreadMentions(0);
+      }
+      return;
+    }
+
     const { data, error } = await supabase.rpc('get_group_unread_status', {
       p_user_id: user.id,
       p_group_id: activeGroupId
     });
 
-    if (isMounted && !error && data?.[0]) {
+    if (isMounted && !error && data?.[0] && (viewModeRef.current as ViewMode) !== 'chat') {
       setHasUnreadMessages(data[0].has_unread);
       setUnreadMentions(data[0].mention_count);
     }
   }, [user, activeGroupId]);
 
+  /**
+   * Fetches general activity notifications (likes, replies)
+   */
+  const checkUnreadActivity = useCallback(async (isMounted: boolean) => {
+    if (!user) return;
+    if (viewModeRef.current === 'notifications') {
+      if (isMounted) setHasUnreadActivity(false);
+      return;
+    }
+
+    const { count, error } = await supabase
+      .from('notifications')
+      .select('*', { count: 'exact', head: true })
+      .eq('user_id', user.id)
+      .eq('is_read', false);
+
+    if (isMounted && !error && count !== null && count > 0) {
+      setHasUnreadActivity(true);
+    }
+  }, [user]);
+
   // 1. Initial Load & Realtime Listener
   useEffect(() => {
     let isMounted = true;
-    if (!supabase || !activeGroupId || activeGroupId === user?.id) return;
+    
+    // Explicitly check for user to fix TS "user is possibly null" in the channel subscription
+    if (!supabase || !user) return;
 
-    // Trigger initial hydration asynchronously
+    if (!activeGroupId || activeGroupId === user.id) {
+      // Defer the state update to avoid React synchronous setState warnings
+      Promise.resolve().then(() => {
+        if (isMounted) checkUnreadActivity(isMounted);
+      });
+      return;
+    }
+
     const initialize = async () => {
-      await fetchUnreadStatus(isMounted);
+      await Promise.all([
+        fetchUnreadStatus(isMounted),
+        checkUnreadActivity(isMounted)
+      ]);
     };
     initialize();
 
-    const channel = supabase.channel(`notifications-${activeGroupId}`)
+    // Group Messages Realtime Listener
+    const msgChannel = supabase.channel(`group-msgs-${activeGroupId}`)
       .on('postgres_changes', {
         event: 'INSERT',
         schema: 'public',
         table: 'group_messages',
         filter: `group_id=eq.${activeGroupId}`
       }, (payload) => {
-        // Only track if user is not currently looking at the chat tab
-        if (viewMode !== 'chat' && isMounted) {
+        if (viewModeRef.current !== 'chat' && isMounted) {
           const msg = payload.new;
-          
-          // Ensure comparisons are case-insensitive
           const contentLower = msg.content.toLowerCase();
           const myUserLower = myUsername ? `@${myUsername.toLowerCase()}` : null;
           
@@ -130,20 +178,32 @@ export const InsightsPanel = (props: InsightsPanelProps) => {
                             contentLower.includes('@everyone') || 
                             (myUserLower && contentLower.includes(myUserLower));
 
-          if (isMention) {
-            setUnreadMentions(prev => prev + 1);
-          } else {
-            setHasUnreadMessages(true);
-          }
+          if (isMention) setUnreadMentions(prev => prev + 1);
+          else setHasUnreadMessages(true);
+        }
+      })
+      .subscribe();
+
+    // General Activity Notifications Realtime Listener
+    const activityChannel = supabase.channel(`activity-${user.id}`)
+      .on('postgres_changes', {
+        event: 'INSERT',
+        schema: 'public',
+        table: 'notifications',
+        filter: `user_id=eq.${user.id}`
+      }, () => {
+        if (viewModeRef.current !== 'notifications' && isMounted) {
+          setHasUnreadActivity(true);
         }
       })
       .subscribe();
 
     return () => {
       isMounted = false;
-      supabase.removeChannel(channel);
+      supabase.removeChannel(msgChannel);
+      supabase.removeChannel(activityChannel);
     };
-  }, [activeGroupId, viewMode, user, fetchUnreadStatus, myUsername]);
+  }, [activeGroupId, user, fetchUnreadStatus, checkUnreadActivity, myUsername]);
 
   // Handle Click Outside for Group Menu
   useEffect(() => {
@@ -174,6 +234,7 @@ export const InsightsPanel = (props: InsightsPanelProps) => {
   const handleOpenChat = () => {
     if (!user) return setShowAuth(true);
     setViewMode('chat');
+    viewModeRef.current = 'chat'; // Synchronous update to prevent any split-second race conditions
     setUnreadMentions(0);
     setHasUnreadMessages(false);
   };
@@ -291,12 +352,21 @@ export const InsightsPanel = (props: InsightsPanelProps) => {
           <button 
             onClick={() => {
               if (!user) return setShowAuth(true);
-              setViewMode(viewMode === 'notifications' ? 'thread' : 'notifications');
+              const newMode = viewMode === 'notifications' ? 'thread' : 'notifications';
+              setViewMode(newMode);
+              if (newMode === 'notifications') {
+                setHasUnreadActivity(false); // Clear notification dot when opening the tab
+              }
             }}
-            className={`p-2.5 rounded-full transition-all ${viewMode === 'notifications' ? 'bg-indigo-100 text-indigo-600' : 'text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800'}`}
+            className={`p-2.5 rounded-full transition-all relative ${viewMode === 'notifications' ? 'bg-indigo-100 text-indigo-600' : 'text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800'}`}
             title="Activity"
           >
             <Bell size={22} />
+            
+            {/* Unread General Activity Dot */}
+            {hasUnreadActivity && viewMode !== 'notifications' && (
+              <span className="absolute top-1 right-1 w-2.5 h-2.5 bg-rose-500 rounded-full border-2 border-white dark:border-slate-900 animate-pulse" />
+            )}
           </button>
 
           {onCloseMobile && (
