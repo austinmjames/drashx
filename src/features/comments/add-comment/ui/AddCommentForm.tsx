@@ -42,8 +42,7 @@ export const AddCommentForm = ({
     italic: false, 
     underline: false,
     highlight: false,
-    small: false,
-    large: false
+    fontSize: '3' // '2' = Small, '3' = Standard, '4' = Large
   });
 
   // Sync initial content and title to contentEditable divs
@@ -58,15 +57,27 @@ export const AddCommentForm = ({
 
   const checkFormats = () => {
     if (typeof document !== 'undefined') {
-      const fontSize = document.queryCommandValue('fontSize');
+      const rawSize = document.queryCommandValue('fontSize');
+      
+      // Handle browser discrepancies. Tailwind CSS sizes (like text-lg) can trick the browser 
+      // into reporting '4' (18px+) by default. We force '3' unless it's strictly a scaled tag.
+      let currentFontSize = '3';
+      if (rawSize === '1' || rawSize === '2') {
+        currentFontSize = '2';
+      } else if (['4', '5', '6', '7'].includes(String(rawSize))) {
+        // Only classify as large if it explicitly exists as an inline style/tag or we selected it.
+        // If content is completely empty, default to standard to prevent ghost toggles.
+        const isEmpty = editorRef.current?.innerHTML.replace(/<[^>]*>?/gm, '').trim().length === 0;
+        currentFontSize = isEmpty ? '3' : '4';
+      }
+
       setFormats({
         bold: document.queryCommandState('bold'),
         italic: document.queryCommandState('italic'),
         underline: document.queryCommandState('underline'),
         highlight: document.queryCommandValue('backColor') === 'rgb(254, 240, 138)' || 
                    document.queryCommandValue('hiliteColor') === 'rgb(254, 240, 138)',
-        small: fontSize === '2',
-        large: fontSize === '4'
+        fontSize: currentFontSize
       });
     }
   };
@@ -80,9 +91,8 @@ export const AddCommentForm = ({
     }
   };
 
-  const toggleSize = (size: '2' | '4') => {
-    const isCurrentlyActive = (size === '2' && formats.small) || (size === '4' && formats.large);
-    applyFormat('fontSize', isCurrentlyActive ? '3' : size);
+  const setFontSize = (size: '2' | '3' | '4') => {
+    applyFormat('fontSize', size);
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -126,11 +136,6 @@ export const AddCommentForm = ({
     ? "absolute inset-0 z-[60] bg-white dark:bg-slate-950 flex flex-col animate-in fade-in zoom-in-95 duration-200"
     : "flex flex-col gap-0 bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-xl overflow-hidden";
 
-  /**
-   * GLOBAL SCALING INJECTOR:
-   * We apply character-level scaling to anything marked .hebrew-scale
-   * and we force the font-serif for consistent glyph weights.
-   */
   const scalingClasses = `
     [&_.hebrew-scale]:text-[1.5em] 
     [&_.hebrew-scale]:leading-none
@@ -175,14 +180,27 @@ export const AddCommentForm = ({
           </div>
         </div>
 
-        <div className="flex items-center gap-0.5 px-4 py-1.5 border-t border-slate-50 dark:border-slate-800/50">
+        <div className="flex items-center gap-0.5 px-4 py-1.5 border-t border-slate-50 dark:border-slate-800/50 overflow-x-auto scrollbar-hide">
           <button type="button" onMouseDown={(e) => { e.preventDefault(); applyFormat('bold'); }} className={`p-1.5 rounded transition-colors ${formats.bold ? 'bg-indigo-100 text-indigo-700' : 'hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-500'}`} title="Bold" aria-label="Toggle bold text"><Bold size={14} /></button>
           <button type="button" onMouseDown={(e) => { e.preventDefault(); applyFormat('italic'); }} className={`p-1.5 rounded transition-colors ${formats.italic ? 'bg-indigo-100 text-indigo-700' : 'hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-500'}`} title="Italic" aria-label="Toggle italic text"><Italic size={14} /></button>
           <button type="button" onMouseDown={(e) => { e.preventDefault(); applyFormat('underline'); }} className={`p-1.5 rounded transition-colors ${formats.underline ? 'bg-indigo-100 text-indigo-700' : 'hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-500'}`} title="Underline" aria-label="Toggle underline text"><Underline size={14} /></button>
           <div className="w-px h-4 bg-slate-200 dark:bg-slate-800 mx-1" />
           <button type="button" onMouseDown={(e) => { e.preventDefault(); applyFormat('hiliteColor', formats.highlight ? 'transparent' : '#fef08a'); }} className={`p-1.5 rounded transition-colors ${formats.highlight ? 'bg-yellow-100 text-yellow-700' : 'hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-500'}`} title="Highlight" aria-label="Toggle text highlight"><Highlighter size={14} /></button>
-          <button type="button" onMouseDown={(e) => { e.preventDefault(); toggleSize('2'); }} className={`p-1.5 rounded transition-colors ${formats.small ? 'bg-indigo-100 text-indigo-700' : 'hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-500'}`} title="Small Text" aria-label="Switch to small font size"><div className="flex items-end gap-0.5"><Type size={12} /><span className="text-[8px] font-bold">S</span></div></button>
-          <button type="button" onMouseDown={(e) => { e.preventDefault(); toggleSize('4'); }} className={`p-1.5 rounded transition-colors ${formats.large ? 'bg-indigo-100 text-indigo-700' : 'hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-500'}`} title="Large Text" aria-label="Switch to large font size"><div className="flex items-end gap-0.5"><Type size={16} /><span className="text-[8px] font-bold">L</span></div></button>
+          
+          <div className="w-px h-4 bg-slate-200 dark:bg-slate-800 mx-1" />
+          
+          {/* New Granular Size Controls */}
+          <div className="flex items-center gap-0.5 bg-slate-50 dark:bg-slate-900/50 p-0.5 rounded-md border border-slate-100 dark:border-slate-800">
+            <button type="button" onMouseDown={(e) => { e.preventDefault(); setFontSize('2'); }} className={`p-1.5 rounded transition-colors ${formats.fontSize === '2' ? 'bg-white dark:bg-slate-800 shadow-sm text-indigo-600' : 'hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-400'}`} title="Small Text">
+              <div className="flex items-end gap-0.5"><Type size={12} /><span className="text-[8px] font-bold">S</span></div>
+            </button>
+            <button type="button" onMouseDown={(e) => { e.preventDefault(); setFontSize('3'); }} className={`p-1.5 rounded transition-colors ${formats.fontSize === '3' ? 'bg-white dark:bg-slate-800 shadow-sm text-indigo-600' : 'hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-400'}`} title="Standard Text">
+              <div className="flex items-end gap-0.5"><Type size={14} /><span className="text-[8px] font-bold">M</span></div>
+            </button>
+            <button type="button" onMouseDown={(e) => { e.preventDefault(); setFontSize('4'); }} className={`p-1.5 rounded transition-colors ${formats.fontSize === '4' ? 'bg-white dark:bg-slate-800 shadow-sm text-indigo-600' : 'hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-400'}`} title="Large Text">
+              <div className="flex items-end gap-0.5"><Type size={16} /><span className="text-[8px] font-bold">L</span></div>
+            </button>
+          </div>
         </div>
       </div>
 
@@ -205,7 +223,7 @@ export const AddCommentForm = ({
           </div>
         )}
 
-        <div className="relative flex-1 flex flex-col min-h-37.5">
+        <div className="relative flex-1 flex flex-col min-h-[150px]">
           {isTextEmpty && (
             <div className="absolute top-0 left-0 pointer-events-none select-none text-slate-400 italic">
               {placeholderText}
@@ -223,6 +241,7 @@ export const AddCommentForm = ({
             }}
             onKeyUp={checkFormats}
             onMouseUp={checkFormats}
+            onFocus={checkFormats}
             className={`w-full flex-1 bg-transparent border-none focus:ring-0 outline-none text-slate-700 dark:text-slate-200 leading-relaxed [&_b]:font-bold [&_i]:italic [&_u]:underline ${isExpanded ? 'text-lg' : 'text-sm'}`}
           />
         </div>
