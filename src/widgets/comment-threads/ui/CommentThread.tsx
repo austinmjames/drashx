@@ -212,7 +212,8 @@ export const CommentThread = ({ verseId, groupId, referenceLabel, currentUserId:
 
     if (visibleChildren.length === 0 && parentId !== null) return null;
 
-    const containerClass = parentId ? "mt-3" : "space-y-6 pt-4";
+    // Added min-w-0 and w-full to prevent horizontal expansion
+    const containerClass = parentId ? "mt-3 w-full min-w-0" : "space-y-6 pt-4 w-full min-w-0";
 
     return (
       <div className={containerClass}>
@@ -225,7 +226,7 @@ export const CommentThread = ({ verseId, groupId, referenceLabel, currentUserId:
           
           if (editingId === comment.id) {
             return (
-              <div key={comment.id} className="my-4 p-2 bg-slate-50 dark:bg-slate-900 rounded-xl">
+              <div key={comment.id} className="my-4 p-2 bg-slate-50 dark:bg-slate-900 rounded-xl w-full min-w-0">
                 <AddCommentForm 
                   verseId={verseId} 
                   groupId={groupId} 
@@ -248,7 +249,8 @@ export const CommentThread = ({ verseId, groupId, referenceLabel, currentUserId:
           }
 
           return (
-            <div key={comment.id} className="flex flex-col mb-4">
+            // Added min-w-0 w-full to the wrapper
+            <div key={comment.id} className="flex flex-col mb-4 w-full min-w-0">
               <CommentItem 
                 comment={comment as unknown as Comment} 
                 currentUserId={currentUserId || undefined} 
@@ -295,9 +297,10 @@ export const CommentThread = ({ verseId, groupId, referenceLabel, currentUserId:
               />
               
               {(replyTo === comment.id || hasVisibleChildren) && (
-                <div className={depth < 2 ? "pl-3.5 ml-1 border-l border-slate-300 dark:border-slate-700" : "mt-2"}>
+                // Added min-w-0 w-full to the nested wrapper to keep the tree shrinking
+                <div className={depth < 2 ? "pl-3.5 ml-1 border-l border-slate-300 dark:border-slate-700 w-full min-w-0" : "mt-2 w-full min-w-0"}>
                   {replyTo === comment.id && (
-                    <div className="mt-3 mb-4 px-1">
+                    <div className="mt-3 mb-4 px-1 w-full min-w-0">
                       <AddCommentForm 
                         verseId={verseId} 
                         groupId={groupId} 
@@ -321,11 +324,11 @@ export const CommentThread = ({ verseId, groupId, referenceLabel, currentUserId:
 
   if (loading) {
     return (
-      <div className="space-y-6 pt-4 px-2">
+      <div className="space-y-6 pt-4 px-2 w-full min-w-0">
         {[1, 2, 3].map(i => (
-          <div key={i} className="flex gap-3 animate-pulse">
-            <div className="w-5 h-5 bg-slate-100 dark:bg-slate-800 rounded-full" />
-            <div className="flex-1 space-y-2 pt-1">
+          <div key={i} className="flex gap-3 animate-pulse w-full min-w-0">
+            <div className="w-5 h-5 bg-slate-100 dark:bg-slate-800 rounded-full shrink-0" />
+            <div className="flex-1 space-y-2 pt-1 min-w-0 w-full">
               <div className="h-3 bg-slate-100 dark:bg-slate-800 rounded w-1/4" />
               <div className="h-12 bg-slate-50 dark:bg-slate-800/40 rounded w-full" />
             </div>
@@ -336,26 +339,28 @@ export const CommentThread = ({ verseId, groupId, referenceLabel, currentUserId:
   }
 
   return (
-    <div className="pb-32">
+    <div className="pb-32 w-full min-w-0">
       {referenceLabel && (
-        <div className="sticky top-0 z-20 bg-slate-50/90 dark:bg-slate-900/90 backdrop-blur-sm py-4 border-b border-slate-200 dark:border-slate-800 mb-2 px-2">
-          <h2 className="text-xs font-black uppercase tracking-widest text-indigo-500">{referenceLabel}</h2>
+        <div className="sticky top-0 z-20 bg-slate-50/90 dark:bg-slate-900/90 backdrop-blur-sm py-4 border-b border-slate-200 dark:border-slate-800 mb-2 px-2 w-full min-w-0">
+          <h2 className="text-xs font-black uppercase tracking-widest text-indigo-500 truncate">{referenceLabel}</h2>
         </div>
       )}
       
       {comments.length > 0 && (
-        <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-3 mt-4 mb-2 mx-2">
-          <h3 className="text-[10px] font-black uppercase tracking-widest text-slate-400">
+        <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-3 mt-4 mb-2 mx-2 w-full min-w-0">
+          <h3 className="text-[10px] font-black uppercase tracking-widest text-slate-400 shrink-0">
             Discussions ({rootComments.length})
           </h3>
           {rootComments.length > 1 && (
-            <CommentSortSelect value={sortOption} onChange={setSortOption} />
+            <div className="shrink-0 max-w-[50%]">
+              <CommentSortSelect value={sortOption} onChange={setSortOption} />
+            </div>
           )}
         </div>
       )}
 
       {comments.length === 0 ? (
-        <div className="text-center py-12 px-4 bg-white/50 dark:bg-slate-900/20 rounded-2xl border border-dashed border-slate-200 dark:border-slate-800 mx-2 mt-4">
+        <div className="text-center py-12 px-4 bg-white/50 dark:bg-slate-900/20 rounded-2xl border border-dashed border-slate-200 dark:border-slate-800 mx-2 mt-4 w-full min-w-0">
           <p className="text-slate-400 text-xs italic">No commentary yet. Be the first to share an insight.</p>
         </div>
       ) : (

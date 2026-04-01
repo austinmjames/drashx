@@ -2,7 +2,7 @@
 "use client";
 
 import React, { useState, useRef, useEffect, useCallback } from 'react';
-import { User as SupabaseUser } from '@supabase/supabase-js';
+import { User as SupabaseUser, RealtimeChannel } from '@supabase/supabase-js';
 import { 
   Users, User as UserIcon, Plus, MessageSquarePlus, 
   Bell, ArrowLeft, X, Mail, ChevronDown, Check
@@ -23,7 +23,7 @@ const getBookAbbreviation = (name: string): string => {
     'Genesis': 'Gen', 'Exodus': 'Exo', 'Leviticus': 'Lev', 'Numbers': 'Num', 'Deuteronomy': 'Deu',
     'Joshua': 'Jos', 'Judges': 'Jud', 'I Samuel': '1 Sam', 'II Samuel': '2 Sam', 'I Kings': '1 Kin', 'II Kings': '2 Kin',
     'Isaiah': 'Isa', 'Jeremiah': 'Jer', 'Ezekiel': 'Eze', 'Hosea': 'Hos', 'Joel': 'Joe', 'Amos': 'Amo', 'Obadiah': 'Oba',
-    'Jonah': 'Jon', 'Micah': 'Mic', 'Nahum': 'Nah', 'Habakkuk': 'Hab', 'Zephaniah': 'Zep', 'Haggai': 'Hag', 'Zechariah': 'Zec', 'Malachi': 'Mal',
+    'Jonah': 'Jon', 'Micah': 'Hab', 'Habakkuk': 'Hab', 'Zephaniah': 'Zep', 'Haggai': 'Hag', 'Zechariah': 'Zec', 'Malachi': 'Mal',
     'Psalms': 'Psa', 'Proverbs': 'Pro', 'Job': 'Job', 'Song of Songs': 'Song', 'Ruth': 'Rut', 'Lamentations': 'Lam',
     'Ecclesiastes': 'Ecc', 'Esther': 'Est', 'Daniel': 'Dan', 'Ezra': 'Ezr', 'Nehemiah': 'Neh', 'I Chronicles': '1 Chr', 'II Chronicles': '2 Chr'
   };
@@ -118,7 +118,7 @@ export const InsightsPanel = (props: InsightsPanelProps) => {
   }, [user, activeGroupId]);
 
   /**
-   * Fetches general activity notifications (likes, replies)
+   * Fetches general activity notifications (likes, replies) filtered by Group
    */
   const checkUnreadActivity = useCallback(async (isMounted: boolean) => {
     if (!user) return;
@@ -129,69 +129,78 @@ export const InsightsPanel = (props: InsightsPanelProps) => {
       return;
     }
 
+    const currentGroupId = activeGroupId === user.id ? null : activeGroupId;
+
     try {
-      // Use limit(1) to safely check existence without pulling all rows or relying on head:true caching
-      const { data, error } = await supabase
+      let query = supabase
         .from('notifications')
         .select('id')
         .eq('user_id', user.id)
         .eq('is_read', false)
         .limit(1);
 
+      if (currentGroupId) {
+        query = query.eq('group_id', currentGroupId);
+      } else {
+        query = query.is('group_id', null);
+      }
+
+      const { data, error } = await query;
+
       if (isMounted) {
-        // Explicitly set to false if no rows are found, ensuring the dot is cleared
         setHasUnreadActivity(!error && data !== null && data.length > 0);
       }
     } catch (err) {
+      console.error("Failed to check unread activity:", err);
       if (isMounted) setHasUnreadActivity(false);
     }
-  }, [user]);
+  }, [user, activeGroupId]);
 
   // 1. Initial Load & Realtime Listener
   useEffect(() => {
     let isMounted = true;
     
-    // Explicitly check for user to fix TS "user is possibly null" in the channel subscription
     if (!supabase || !user) return;
 
     if (!activeGroupId || activeGroupId === user.id) {
-      // Defer the state update to avoid React synchronous setState warnings
       Promise.resolve().then(() => {
         if (isMounted) checkUnreadActivity(isMounted);
       });
-      return;
+    } else {
+      const initialize = async () => {
+        await Promise.all([
+          fetchUnreadStatus(isMounted),
+          checkUnreadActivity(isMounted)
+        ]);
+      };
+      initialize();
     }
 
-    const initialize = async () => {
-      await Promise.all([
-        fetchUnreadStatus(isMounted),
-        checkUnreadActivity(isMounted)
-      ]);
-    };
-    initialize();
-
     // Group Messages Realtime Listener
-    const msgChannel = supabase.channel(`group-msgs-${activeGroupId}`)
-      .on('postgres_changes', {
-        event: 'INSERT',
-        schema: 'public',
-        table: 'group_messages',
-        filter: `group_id=eq.${activeGroupId}`
-      }, (payload) => {
-        if (viewModeRef.current !== 'chat' && isMounted) {
-          const msg = payload.new;
-          const contentLower = msg.content.toLowerCase();
-          const myUserLower = myUsername ? `@${myUsername.toLowerCase()}` : null;
-          
-          const isMention = contentLower.includes('@here') || 
-                            contentLower.includes('@everyone') || 
-                            (myUserLower && contentLower.includes(myUserLower));
+    let msgChannel: RealtimeChannel | undefined;
+    if (activeGroupId && activeGroupId !== user.id) {
+      msgChannel = supabase.channel(`group-msgs-${activeGroupId}`)
+        .on('postgres_changes', {
+          event: 'INSERT',
+          schema: 'public',
+          table: 'group_messages',
+          filter: `group_id=eq.${activeGroupId}`
+        }, (payload) => {
+          if (viewModeRef.current !== 'chat' && isMounted) {
+            const msg = payload.new;
+            const contentLower = msg.content.toLowerCase();
+            const myUserLower = myUsername ? `@${myUsername.toLowerCase()}` : null;
+            
+            const isMention = contentLower.includes('@here') || 
+                              contentLower.includes('@everyone') || 
+                              (myUserLower && contentLower.includes(myUserLower));
 
-          if (isMention) setUnreadMentions(prev => prev + 1);
-          else setHasUnreadMessages(true);
-        }
-      })
-      .subscribe();
+            if (isMention) setUnreadMentions(prev => prev + 1);
+            else setHasUnreadMessages(true);
+          }
+        })
+        .subscribe();
+    }
 
     // General Activity Notifications Realtime Listener
     const activityChannel = supabase.channel(`activity-${user.id}`)
@@ -200,8 +209,12 @@ export const InsightsPanel = (props: InsightsPanelProps) => {
         schema: 'public',
         table: 'notifications',
         filter: `user_id=eq.${user.id}`
-      }, () => {
-        if (viewModeRef.current !== 'notifications' && isMounted) {
+      }, (payload) => {
+        const notifGroupId = payload.new.group_id;
+        const currentGroupId = activeGroupId === user.id ? null : activeGroupId;
+
+        // Only trigger the dot if the notification belongs to the active context
+        if (notifGroupId === currentGroupId && viewModeRef.current !== 'notifications' && isMounted) {
           setHasUnreadActivity(true);
         }
       })
@@ -209,7 +222,7 @@ export const InsightsPanel = (props: InsightsPanelProps) => {
 
     return () => {
       isMounted = false;
-      supabase.removeChannel(msgChannel);
+      if (msgChannel) supabase.removeChannel(msgChannel);
       supabase.removeChannel(activityChannel);
     };
   }, [activeGroupId, user, fetchUnreadStatus, checkUnreadActivity, myUsername]);
@@ -407,23 +420,24 @@ export const InsightsPanel = (props: InsightsPanelProps) => {
         ) : viewMode === 'notifications' && user ? (
           <InsightsActivity 
             user={user} 
+            activeGroupId={activeGroupId === user.id ? null : activeGroupId}
             onSelectVerse={onSelectVerse} 
             setViewMode={setViewMode} 
           />
         ) : (
-          <div className="flex-1 flex flex-col overflow-hidden">
-             <div className="flex-1 overflow-y-auto scrollbar-hide px-6 py-2">
+          <div className="flex-1 flex flex-col overflow-hidden min-w-0 w-full">
+             <div className="flex-1 overflow-y-auto overflow-x-hidden scrollbar-hide px-6 py-2 w-full">
                 {selectedVerse && activeVerseId !== undefined ? (
-                  <CommentThread verseId={activeVerseId} groupId={activeGroupId || undefined} />
+                  <CommentThread verseId={activeVerseId} groupId={activeGroupId === user?.id ? undefined : (activeGroupId || undefined)} />
                 ) : !isLoading && (
-                  <div className="h-full py-32 flex flex-col items-center justify-center text-slate-400 gap-4 p-8 text-center">
+                  <div className="h-full py-32 flex flex-col items-center justify-center text-slate-400 gap-4 p-8 text-center w-full">
                     <MessageSquarePlus size={40} className="opacity-20" />
                     <p className="text-sm font-medium">Select a verse to view insights or open messages.</p>
                   </div>
                 )}
              </div>
              {selectedVerse && (
-               <div className="p-4 border-t border-slate-200 dark:border-slate-800 bg-slate-50/50">
+               <div className="p-4 border-t border-slate-200 dark:border-slate-800 bg-slate-50/50 w-full">
                  <button 
                   onClick={() => user ? setIsAddingInsight(true) : setShowAuth(true)} 
                   title="Add your commentary"
@@ -442,7 +456,7 @@ export const InsightsPanel = (props: InsightsPanelProps) => {
         <div className="absolute inset-0 z-50 bg-white dark:bg-slate-950 flex flex-col animate-in slide-in-from-bottom-8 duration-300">
            <AddCommentForm 
              verseId={activeVerseId as string} 
-             groupId={activeGroupId || undefined}
+             groupId={activeGroupId === user?.id ? undefined : (activeGroupId || undefined)}
              onSuccess={() => setIsAddingInsight(false)} 
              onCancel={() => setIsAddingInsight(false)}
              fullHeight

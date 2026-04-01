@@ -34,6 +34,7 @@ export const AddCommentForm = ({
   const [isExpanded, setIsExpanded] = useState(fullHeight);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [isTitleFocused, setIsTitleFocused] = useState(false);
   
   const titleRef = useRef<HTMLDivElement>(null);
   const editorRef = useRef<HTMLDivElement>(null);
@@ -60,18 +61,33 @@ export const AddCommentForm = ({
 
   const checkFormats = () => {
     if (typeof document !== 'undefined') {
+      const activeElement = document.activeElement;
+      const isTitle = activeElement === titleRef.current;
+      setIsTitleFocused(isTitle);
+
       const rawSize = document.queryCommandValue('fontSize');
-      
-      // Handle browser discrepancies. Tailwind CSS sizes (like text-lg) can trick the browser 
-      // into reporting '4' (18px+) by default. We force '3' unless it's strictly a scaled tag.
-      let currentFontSize = '3';
-      if (rawSize === '1' || rawSize === '2') {
-        currentFontSize = '2';
-      } else if (['4', '5', '6', '7'].includes(String(rawSize))) {
-        // Only classify as large if it explicitly exists as an inline style/tag or we selected it.
-        // If content is completely empty, default to standard to prevent ghost toggles.
-        const isEmpty = editorRef.current?.innerHTML.replace(/<[^>]*>?/gm, '').trim().length === 0;
-        currentFontSize = isEmpty ? '3' : '4';
+      let currentFontSize = '3'; // Always default to Medium
+
+      // To prevent Tailwind's text-sm (used in replies) from tricking the browser into thinking 
+      // we are in "Small" mode, we verify if a <font size="..."> tag is ACTUALLY present in the DOM tree.
+      const selection = window.getSelection();
+      let parentNode = selection?.anchorNode?.parentNode as HTMLElement | null;
+      let hasExplicitSize = false;
+
+      while (parentNode && parentNode !== editorRef.current && parentNode !== titleRef.current) {
+        if (parentNode.nodeName === 'FONT' && (parentNode as HTMLFontElement).size) {
+          hasExplicitSize = true;
+          break;
+        }
+        parentNode = parentNode.parentNode as HTMLElement | null;
+      }
+
+      if (hasExplicitSize) {
+        if (rawSize === '1' || rawSize === '2') {
+          currentFontSize = '2';
+        } else if (['4', '5', '6', '7'].includes(String(rawSize))) {
+          currentFontSize = '4';
+        }
       }
 
       setFormats({
@@ -82,7 +98,8 @@ export const AddCommentForm = ({
                    document.queryCommandValue('hiliteColor') === 'rgb(254, 240, 138)',
         unorderedList: document.queryCommandState('insertUnorderedList'),
         orderedList: document.queryCommandState('insertOrderedList'),
-        fontSize: currentFontSize
+        // Always show "Large" when the title is focused, otherwise use calculated size
+        fontSize: isTitle ? '4' : currentFontSize 
       });
     }
   };
@@ -102,6 +119,7 @@ export const AddCommentForm = ({
 
   // Ensure entering the editor clears any bleeding tags from the title
   const handleEditorFocus = () => {
+    setIsTitleFocused(false);
     if (editorRef.current) {
       const isEmpty = editorRef.current.innerHTML.replace(/<[^>]*>?/gm, '').trim().length === 0;
       if (isEmpty) {
@@ -117,6 +135,13 @@ export const AddCommentForm = ({
       e.preventDefault();
       editorRef.current?.focus();
     }
+  };
+
+  // Strip rich text out of the title if the user tries to paste
+  const handleTitlePaste = (e: React.ClipboardEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    const text = e.clipboardData.getData('text/plain');
+    document.execCommand('insertText', false, text);
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -204,7 +229,7 @@ export const AddCommentForm = ({
           </div>
         </div>
 
-        <div className="flex items-center gap-0.5 px-4 py-1.5 border-t border-slate-50 dark:border-slate-800/50 overflow-x-auto scrollbar-hide">
+        <div className={`flex items-center gap-0.5 px-4 py-1.5 border-t border-slate-50 dark:border-slate-800/50 overflow-x-auto scrollbar-hide transition-opacity duration-200 ${isTitleFocused ? 'opacity-30 pointer-events-none select-none grayscale' : 'opacity-100'}`}>
           <button type="button" onMouseDown={(e) => { e.preventDefault(); applyFormat('bold'); }} className={`p-1.5 rounded transition-colors ${formats.bold ? 'bg-indigo-100 text-indigo-700' : 'hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-500'}`} title="Bold" aria-label="Toggle bold text"><Bold size={14} /></button>
           <button type="button" onMouseDown={(e) => { e.preventDefault(); applyFormat('italic'); }} className={`p-1.5 rounded transition-colors ${formats.italic ? 'bg-indigo-100 text-indigo-700' : 'hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-500'}`} title="Italic" aria-label="Toggle italic text"><Italic size={14} /></button>
           <button type="button" onMouseDown={(e) => { e.preventDefault(); applyFormat('underline'); }} className={`p-1.5 rounded transition-colors ${formats.underline ? 'bg-indigo-100 text-indigo-700' : 'hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-500'}`} title="Underline" aria-label="Toggle underline text"><Underline size={14} /></button>
@@ -251,12 +276,16 @@ export const AddCommentForm = ({
               dir="auto"
               onInput={(e) => setTitle(e.currentTarget.innerHTML)}
               onKeyDown={handleTitleKeyDown}
+              onPaste={handleTitlePaste}
+              onFocus={checkFormats}
+              onBlur={checkFormats}
+              onMouseUp={checkFormats}
               className="w-full bg-transparent text-lg md:text-xl font-black text-slate-900 dark:text-white border-b border-transparent focus:border-indigo-500/30 transition-all pb-2 font-serif min-h-[1.5em]"
             />
           </div>
         )}
 
-        <div className="relative flex-1 flex flex-col min-h-[150px]">
+        <div className="relative flex-1 flex flex-col min-h-37.5">
           {isTextEmpty && (
             <div className="absolute top-0 left-0 pointer-events-none select-none text-slate-400 italic">
               {placeholderText}

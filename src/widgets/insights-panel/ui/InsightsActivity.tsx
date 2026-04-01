@@ -54,20 +54,23 @@ interface Notification {
   is_read: boolean;
   created_at: string;
   verse_id: string;
-  content?: string; // Standard fallback column
+  group_id?: string | null;
+  content?: string; 
   actor: { display_name: string; username: string; };
   verse_context?: { book_id: string; chapter_num: number; verse_num: number; };
-  comment?: { content: string }; // Optional relation based on schema
+  comment?: { content: string }; 
 }
 
 interface InsightsActivityProps {
   user: SupabaseUser;
+  activeGroupId: string | null;
   onSelectVerse?: (verse: Verse) => void;
   setViewMode: (mode: 'thread' | 'notifications' | 'chat') => void;
 }
 
 export const InsightsActivity = ({ 
   user, 
+  activeGroupId,
   onSelectVerse, 
   setViewMode 
 }: InsightsActivityProps) => {
@@ -81,8 +84,7 @@ export const InsightsActivity = ({
     const loadNotifications = async () => {
       if (!supabase) return;
       try {
-        // First try to fetch with the comment join (in case comment_id exists)
-        const response = await supabase
+        let query = supabase
           .from('notifications')
           .select(`
             *, 
@@ -94,12 +96,19 @@ export const InsightsActivity = ({
           .order('created_at', { ascending: false })
           .limit(20);
 
+        if (activeGroupId) {
+          query = query.eq('group_id', activeGroupId);
+        } else {
+          query = query.is('group_id', null);
+        }
+
+        const response = await query;
         let data = response.data;
         const error = response.error;
 
-        // If the comment join fails (e.g. no FK exists), fallback to standard columns
+        // If the comment join fails, fallback to standard columns
         if (error) {
-          const fallback = await supabase
+          let fallbackQuery = supabase
             .from('notifications')
             .select(`
               *, 
@@ -109,6 +118,14 @@ export const InsightsActivity = ({
             .eq('user_id', user.id)
             .order('created_at', { ascending: false })
             .limit(20);
+
+          if (activeGroupId) {
+            fallbackQuery = fallbackQuery.eq('group_id', activeGroupId);
+          } else {
+            fallbackQuery = fallbackQuery.is('group_id', null);
+          }
+          
+          const fallback = await fallbackQuery;
           data = fallback.data;
         }
 
@@ -124,7 +141,7 @@ export const InsightsActivity = ({
 
     loadNotifications();
     return () => { isMounted = false; };
-  }, [user.id]);
+  }, [user.id, activeGroupId]);
 
   const handleNotificationClick = async (notif: Notification) => {
     if (!supabase) return;
