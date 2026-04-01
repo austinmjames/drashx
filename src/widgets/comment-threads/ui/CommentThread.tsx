@@ -1,5 +1,5 @@
 // Path: src/widgets/comment-threads/ui/CommentThread.tsx
-import React, { useEffect, useState, useCallback, useRef, useMemo } from 'react';
+import React, { useEffect, useState, useCallback, useMemo } from 'react';
 import { supabase } from '../../../shared/api/supabase';
 import { CommentItem, Comment } from '../../../entities/comment/ui/CommentItem';
 import { AddCommentForm } from '../../../features/comments/add-comment/ui/AddCommentForm';
@@ -43,8 +43,6 @@ export const CommentThread = ({ verseId, groupId, referenceLabel, currentUserId:
   const [loading, setLoading] = useState(true);
   const [sortOption, setSortOption] = useState<CommentSortOption>('newest');
   const [lastReadAt, setLastReadAt] = useState<Date | null>(null);
-  
-  const isInitialMount = useRef(true);
 
   // 1. Resolve Session User
   useEffect(() => {
@@ -73,7 +71,12 @@ export const CommentThread = ({ verseId, groupId, referenceLabel, currentUserId:
   // 3. Fetch Full Thread Data
   const fetchThread = useCallback(async (showLoading = true) => {
     if (verseId === undefined || verseId === null) return; 
-    if (showLoading) setLoading(true);
+    
+    // Instantly wipe old state and show loader if this is a context switch
+    if (showLoading) {
+      setLoading(true);
+      setComments([]); 
+    }
     
     const isPersonal = groupId === currentUserId;
     const numericVerseId = typeof verseId === 'string' ? parseInt(verseId, 10) : verseId;
@@ -113,18 +116,22 @@ export const CommentThread = ({ verseId, groupId, referenceLabel, currentUserId:
   // 4. Initialization & Realtime
   useEffect(() => {
     if (verseId === undefined || verseId === null || !currentUserId) return;
-    fetchThread(isInitialMount.current);
-    isInitialMount.current = false;
+    
+    // Force a fresh loading state every time verseId or groupId changes
+    // Defer the state update to avoid React synchronous setState warnings
+    Promise.resolve().then(() => {
+      fetchThread(true);
+    });
     
     const numericVerseId = typeof verseId === 'string' ? parseInt(verseId, 10) : verseId;
 
-    const channel = supabase.channel(`verse-${numericVerseId}`)
+    const channel = supabase.channel(`verse-${numericVerseId}-${groupId || 'personal'}`)
       .on('postgres_changes', { 
         event: '*', 
         schema: 'public', 
         table: 'comments', 
         filter: `verse_id=eq.${numericVerseId}` 
-      }, () => fetchThread(false))
+      }, () => fetchThread(false)) // Realtime updates shouldn't trigger the skeleton loader
       .subscribe();
 
     return () => { supabase.removeChannel(channel); };
@@ -151,11 +158,16 @@ export const CommentThread = ({ verseId, groupId, referenceLabel, currentUserId:
 
     const enriched = comments.map(c => {
       const descendants = getDescendants(c.id);
+      
       // Ensure we don't flag our own comments as "Brand New"
       const isBrandNew = lastReadAt && new Date(c.created_at) > lastReadAt && c.user_id !== currentUserId;
-      const latest_reply_at = descendants.length > 0 
-        ? descendants.reduce((max, desc) => new Date(desc.created_at) > new Date(max) ? desc.created_at : max, c.created_at)
+      
+      // Only check descendants written by OTHER users to flag "New Replies"
+      const otherDescendants = descendants.filter(d => d.user_id !== currentUserId);
+      const latest_reply_at = otherDescendants.length > 0 
+        ? otherDescendants.reduce((max, desc) => new Date(desc.created_at) > new Date(max) ? desc.created_at : max, new Date(0).toISOString())
         : null;
+        
       const hasNewReplies = !isBrandNew && lastReadAt && latest_reply_at && new Date(latest_reply_at) > lastReadAt;
 
       return {
@@ -212,7 +224,6 @@ export const CommentThread = ({ verseId, groupId, referenceLabel, currentUserId:
 
     if (visibleChildren.length === 0 && parentId !== null) return null;
 
-    // Added min-w-0 and w-full to prevent horizontal expansion
     const containerClass = parentId ? "mt-3 w-full min-w-0" : "space-y-6 pt-4 w-full min-w-0";
 
     return (
@@ -249,7 +260,6 @@ export const CommentThread = ({ verseId, groupId, referenceLabel, currentUserId:
           }
 
           return (
-            // Added min-w-0 w-full to the wrapper
             <div key={comment.id} className="flex flex-col mb-4 w-full min-w-0">
               <CommentItem 
                 comment={comment as unknown as Comment} 
@@ -297,7 +307,6 @@ export const CommentThread = ({ verseId, groupId, referenceLabel, currentUserId:
               />
               
               {(replyTo === comment.id || hasVisibleChildren) && (
-                // Added min-w-0 w-full to the nested wrapper to keep the tree shrinking
                 <div className={depth < 2 ? "pl-3.5 ml-1 border-l border-slate-300 dark:border-slate-700 w-full min-w-0" : "mt-2 w-full min-w-0"}>
                   {replyTo === comment.id && (
                     <div className="mt-3 mb-4 px-1 w-full min-w-0">
@@ -324,13 +333,13 @@ export const CommentThread = ({ verseId, groupId, referenceLabel, currentUserId:
 
   if (loading) {
     return (
-      <div className="space-y-6 pt-4 px-2 w-full min-w-0">
+      <div className="space-y-6 pt-4 px-2 w-full min-w-0 animate-in fade-in duration-300">
         {[1, 2, 3].map(i => (
-          <div key={i} className="flex gap-3 animate-pulse w-full min-w-0">
-            <div className="w-5 h-5 bg-slate-100 dark:bg-slate-800 rounded-full shrink-0" />
-            <div className="flex-1 space-y-2 pt-1 min-w-0 w-full">
-              <div className="h-3 bg-slate-100 dark:bg-slate-800 rounded w-1/4" />
-              <div className="h-12 bg-slate-50 dark:bg-slate-800/40 rounded w-full" />
+          <div key={i} className="flex gap-3 w-full min-w-0">
+            <div className="w-6 h-6 bg-slate-100 dark:bg-slate-800 rounded-full shrink-0 animate-pulse mt-1" />
+            <div className="flex-1 space-y-3 pt-1 min-w-0 w-full">
+              <div className="h-3 bg-slate-100 dark:bg-slate-800 rounded w-1/3 animate-pulse" />
+              <div className="h-16 bg-slate-50 dark:bg-slate-800/40 rounded-2xl w-full animate-pulse" />
             </div>
           </div>
         ))}

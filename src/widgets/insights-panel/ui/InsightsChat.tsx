@@ -90,7 +90,7 @@ const AvatarCircle = ({ avatarUrl, name, size = "sm" }: { avatarUrl?: string | n
   
   let isCustomAvatar = false;
   let CustomIconComp: React.ElementType<{ size?: number; className?: string; strokeWidth?: number }> = User;
-  let avatarBgClass = ''; // Use class instead of hex
+  let avatarBgClass = ''; 
   let avatarTextClass = 'text-slate-500 dark:text-slate-300 font-bold';
 
   if (avatarUrl && avatarUrl.includes(':') && !avatarUrl.startsWith('http')) {
@@ -98,7 +98,7 @@ const AvatarCircle = ({ avatarUrl, name, size = "sm" }: { avatarUrl?: string | n
     const [colorId, iconId] = avatarUrl.split(':');
     const colorObj = PROFILE_COLORS.find(c => c.id === colorId);
     if (colorObj) {
-      avatarBgClass = colorObj.hex; // E.g. 'bg-purple-500'
+      avatarBgClass = colorObj.hex; 
       avatarTextClass = 'text-white font-bold';
     }
     const foundIcon = ALL_AVATAR_ICONS.find(i => i.id === iconId)?.icon;
@@ -159,11 +159,24 @@ export const InsightsChat = ({ groupId, user, groupName, groupColor = 'indigo', 
 
   useEffect(() => {
     let isMounted = true;
-    const init = async () => { onChatOpened(); updateLastRead(); await fetchMessages(isMounted); };
+    
+    const init = async () => { 
+      // Instantly clear old messages to prevent stale UI during group switch
+      if (isMounted) {
+        setIsLoading(true);
+        setMessages([]); 
+      }
+      onChatOpened(); 
+      updateLastRead(); 
+      await fetchMessages(isMounted); 
+    };
+    
     init();
+    
     const channel = supabase?.channel(`chat-view-${groupId}`).on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'group_messages', filter: `group_id=eq.${groupId}` }, () => {
       if (isMounted) { fetchMessages(true); updateLastRead(); }
     }).subscribe();
+    
     return () => { isMounted = false; if (channel) supabase?.removeChannel(channel); };
   }, [groupId, onChatOpened, fetchMessages, updateLastRead]);
 
@@ -255,7 +268,7 @@ export const InsightsChat = ({ groupId, user, groupName, groupColor = 'indigo', 
             book={ref.book}
             chapter={ref.chapter}
             verse={ref.verse}
-            label={ref.originalText} // Maintain original text for ranges like Genesis 1:1-3
+            label={ref.originalText} 
             onClick={handleRefJump}
             className="mx-0.5"
           />
@@ -281,7 +294,26 @@ export const InsightsChat = ({ groupId, user, groupName, groupColor = 'indigo', 
     });
   };
 
-  if (isLoading) return <div className="h-full flex flex-col items-center justify-center text-slate-400 gap-3"><Loader2 size={24} className="animate-spin text-indigo-500" /><p className="text-xs font-bold uppercase tracking-widest">Loading Messages...</p></div>;
+  if (isLoading) {
+    return (
+      <div className="h-full flex flex-col bg-white dark:bg-slate-950 animate-in fade-in duration-300">
+        <div className="flex-1 overflow-y-auto p-4 space-y-6">
+          {[1, 2, 3, 4].map(i => (
+            <div key={i} className={`flex gap-3 ${i % 2 === 0 ? 'flex-row-reverse' : 'flex-row'}`}>
+              <div className="w-6 h-6 rounded-full bg-slate-100 dark:bg-slate-800 animate-pulse shrink-0 mt-1" />
+              <div className={`flex flex-col gap-1.5 ${i % 2 === 0 ? 'items-end' : 'items-start'} w-full`}>
+                <div className="w-16 h-2 bg-slate-100 dark:bg-slate-800 rounded animate-pulse" />
+                <div className={`h-10 bg-slate-50 dark:bg-slate-900/50 rounded-2xl animate-pulse ${i % 2 === 0 ? 'w-2/3 rounded-tr-none' : 'w-3/4 rounded-tl-none'}`} />
+              </div>
+            </div>
+          ))}
+        </div>
+        <div className="shrink-0 p-4 border-t border-slate-100 dark:border-slate-800">
+          <div className="h-12 bg-slate-50 dark:bg-slate-900 rounded-2xl animate-pulse w-full" />
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="h-full flex flex-col bg-white dark:bg-slate-950 animate-in slide-in-from-top-4 duration-300 relative">

@@ -3,7 +3,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { User as SupabaseUser } from '@supabase/supabase-js';
-import { Bell, Loader2, MessageCircle } from 'lucide-react';
+import { Bell, MessageCircle } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { supabase } from '../../../shared/api/supabase';
 import { Verse } from '../../../entities/verse/ui/VerseCard';
@@ -14,7 +14,7 @@ const getBookAbbreviation = (name: string): string => {
     'Genesis': 'Gen', 'Exodus': 'Exo', 'Leviticus': 'Lev', 'Numbers': 'Num', 'Deuteronomy': 'Deu',
     'Joshua': 'Jos', 'Judges': 'Jud', 'I Samuel': '1 Sam', 'II Samuel': '2 Sam', 'I Kings': '1 Kin', 'II Kings': '2 Kin',
     'Isaiah': 'Isa', 'Jeremiah': 'Jer', 'Ezekiel': 'Eze', 'Hosea': 'Hos', 'Joel': 'Joe', 'Amos': 'Amo', 'Obadiah': 'Oba',
-    'Jonah': 'Jon', 'Micah': 'Mic', 'Nahum': 'Nah', 'Habakkuk': 'Hab', 'Zephaniah': 'Zep', 'Haggai': 'Hag', 'Zechariah': 'Zec', 'Malachi': 'Mal',
+    'Jonah': 'Jon', 'Micah': 'Mic', 'Nahum': 'Hab', 'Habakkuk': 'Hab', 'Zephaniah': 'Zep', 'Haggai': 'Hag', 'Zechariah': 'Zec', 'Malachi': 'Mal',
     'Psalms': 'Psa', 'Proverbs': 'Pro', 'Job': 'Job', 'Song of Songs': 'Song', 'Ruth': 'Rut', 'Lamentations': 'Lam',
     'Ecclesiastes': 'Ecc', 'Esther': 'Est', 'Daniel': 'Dan', 'Ezra': 'Ezr', 'Nehemiah': 'Neh', 'I Chronicles': '1 Chr', 'II Chronicles': '2 Chr'
   };
@@ -83,6 +83,13 @@ export const InsightsActivity = ({
 
     const loadNotifications = async () => {
       if (!supabase) return;
+      
+      // Instantly wipe stale notifications on context switch
+      if (isMounted) {
+        setIsLoading(true);
+        setNotifications([]);
+      }
+      
       try {
         let query = supabase
           .from('notifications')
@@ -177,9 +184,20 @@ export const InsightsActivity = ({
 
   if (isLoading) {
     return (
-      <div className="flex-1 flex flex-col items-center justify-center py-20 text-slate-400 gap-3">
-        <Loader2 className="animate-spin text-indigo-500" size={24} />
-        <p className="text-xs font-bold uppercase tracking-widest">Checking activity...</p>
+      <div className="flex-1 overflow-y-auto divide-y divide-slate-100 dark:divide-slate-800 animate-in fade-in duration-300 p-2">
+        {[1, 2, 3, 4, 5].map(i => (
+          <div key={i} className="w-full p-4 flex items-start gap-4">
+            <div className="w-9 h-9 rounded-full bg-slate-100 dark:bg-slate-800 animate-pulse shrink-0 mt-1" />
+            <div className="flex-1 space-y-3 pt-1">
+              <div className="flex justify-between">
+                <div className="h-3 bg-slate-100 dark:bg-slate-800 rounded animate-pulse w-1/2" />
+                <div className="h-2 bg-slate-100 dark:bg-slate-800 rounded animate-pulse w-10" />
+              </div>
+              <div className="h-2 bg-slate-50 dark:bg-slate-900/50 rounded animate-pulse w-3/4" />
+              <div className="h-2 bg-slate-50 dark:bg-slate-900/50 rounded animate-pulse w-1/3" />
+            </div>
+          </div>
+        ))}
       </div>
     );
   }
