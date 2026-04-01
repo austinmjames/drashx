@@ -122,19 +122,28 @@ export const InsightsPanel = (props: InsightsPanelProps) => {
    */
   const checkUnreadActivity = useCallback(async (isMounted: boolean) => {
     if (!user) return;
+    
+    // Clear instantly if they are already looking at the tab
     if (viewModeRef.current === 'notifications') {
       if (isMounted) setHasUnreadActivity(false);
       return;
     }
 
-    const { count, error } = await supabase
-      .from('notifications')
-      .select('*', { count: 'exact', head: true })
-      .eq('user_id', user.id)
-      .eq('is_read', false);
+    try {
+      // Use limit(1) to safely check existence without pulling all rows or relying on head:true caching
+      const { data, error } = await supabase
+        .from('notifications')
+        .select('id')
+        .eq('user_id', user.id)
+        .eq('is_read', false)
+        .limit(1);
 
-    if (isMounted && !error && count !== null && count > 0) {
-      setHasUnreadActivity(true);
+      if (isMounted) {
+        // Explicitly set to false if no rows are found, ensuring the dot is cleared
+        setHasUnreadActivity(!error && data !== null && data.length > 0);
+      }
+    } catch (err) {
+      if (isMounted) setHasUnreadActivity(false);
     }
   }, [user]);
 
