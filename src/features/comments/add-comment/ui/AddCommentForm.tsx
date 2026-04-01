@@ -5,7 +5,8 @@ import React, { useState, useEffect, useRef } from 'react';
 import { 
   Send, X, Maximize2, Minimize2, 
   Loader2, BookOpen, AlertCircle, Info,
-  Bold, Italic, Underline, Highlighter, Type 
+  Bold, Italic, Underline, Highlighter, Type,
+  List, ListOrdered
 } from 'lucide-react';
 import { supabase } from '@/shared/api/supabase';
 
@@ -42,6 +43,8 @@ export const AddCommentForm = ({
     italic: false, 
     underline: false,
     highlight: false,
+    unorderedList: false,
+    orderedList: false,
     fontSize: '3' // '2' = Small, '3' = Standard, '4' = Large
   });
 
@@ -77,6 +80,8 @@ export const AddCommentForm = ({
         underline: document.queryCommandState('underline'),
         highlight: document.queryCommandValue('backColor') === 'rgb(254, 240, 138)' || 
                    document.queryCommandValue('hiliteColor') === 'rgb(254, 240, 138)',
+        unorderedList: document.queryCommandState('insertUnorderedList'),
+        orderedList: document.queryCommandState('insertOrderedList'),
         fontSize: currentFontSize
       });
     }
@@ -203,7 +208,15 @@ export const AddCommentForm = ({
           <button type="button" onMouseDown={(e) => { e.preventDefault(); applyFormat('bold'); }} className={`p-1.5 rounded transition-colors ${formats.bold ? 'bg-indigo-100 text-indigo-700' : 'hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-500'}`} title="Bold" aria-label="Toggle bold text"><Bold size={14} /></button>
           <button type="button" onMouseDown={(e) => { e.preventDefault(); applyFormat('italic'); }} className={`p-1.5 rounded transition-colors ${formats.italic ? 'bg-indigo-100 text-indigo-700' : 'hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-500'}`} title="Italic" aria-label="Toggle italic text"><Italic size={14} /></button>
           <button type="button" onMouseDown={(e) => { e.preventDefault(); applyFormat('underline'); }} className={`p-1.5 rounded transition-colors ${formats.underline ? 'bg-indigo-100 text-indigo-700' : 'hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-500'}`} title="Underline" aria-label="Toggle underline text"><Underline size={14} /></button>
+          
           <div className="w-px h-4 bg-slate-200 dark:bg-slate-800 mx-1" />
+          
+          {/* List Controls */}
+          <button type="button" onMouseDown={(e) => { e.preventDefault(); applyFormat('insertUnorderedList'); }} className={`p-1.5 rounded transition-colors ${formats.unorderedList ? 'bg-indigo-100 text-indigo-700' : 'hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-500'}`} title="Bullet List" aria-label="Toggle bullet list"><List size={14} /></button>
+          <button type="button" onMouseDown={(e) => { e.preventDefault(); applyFormat('insertOrderedList'); }} className={`p-1.5 rounded transition-colors ${formats.orderedList ? 'bg-indigo-100 text-indigo-700' : 'hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-500'}`} title="Numbered List" aria-label="Toggle numbered list"><ListOrdered size={14} /></button>
+
+          <div className="w-px h-4 bg-slate-200 dark:bg-slate-800 mx-1" />
+          
           <button type="button" onMouseDown={(e) => { e.preventDefault(); applyFormat('hiliteColor', formats.highlight ? 'transparent' : '#fef08a'); }} className={`p-1.5 rounded transition-colors ${formats.highlight ? 'bg-yellow-100 text-yellow-700' : 'hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-500'}`} title="Highlight" aria-label="Toggle text highlight"><Highlighter size={14} /></button>
           
           <div className="w-px h-4 bg-slate-200 dark:bg-slate-800 mx-1" />
@@ -262,7 +275,7 @@ export const AddCommentForm = ({
             onKeyUp={checkFormats}
             onMouseUp={checkFormats}
             onFocus={handleEditorFocus}
-            className={`w-full flex-1 bg-transparent border-none focus:ring-0 outline-none text-slate-700 dark:text-slate-200 leading-relaxed [&_b]:font-bold [&_i]:italic [&_u]:underline ${isExpanded ? 'text-lg' : 'text-sm'}`}
+            className={`w-full flex-1 bg-transparent border-none focus:ring-0 outline-none text-slate-700 dark:text-slate-200 leading-relaxed [&_b]:font-bold [&_i]:italic [&_u]:underline [&_ul]:list-disc [&_ul]:ml-6 [&_ol]:list-decimal [&_ol]:ml-6 [&_li]:mt-1 ${isExpanded ? 'text-lg' : 'text-sm'}`}
           />
         </div>
 
