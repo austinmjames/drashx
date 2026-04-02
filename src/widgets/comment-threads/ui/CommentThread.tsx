@@ -94,7 +94,7 @@ export const CommentThread = ({ verseId, groupId, referenceLabel, currentUserId:
     // FIX: Removed strict foreign key hints (!comment_id, !group_id) that cause silent PostgREST crashes
     const selectQuery = `
       *,
-      profiles:profiles!user_id ( username, display_name, avatar_url ),
+      profiles:profiles!user_id ( username, display_name, avatar_url, scholarly_score ),
       likes ( user_id ),
       bookmarks ( user_id ),
       group:groups ( name )
@@ -103,7 +103,7 @@ export const CommentThread = ({ verseId, groupId, referenceLabel, currentUserId:
     // The !inner hint on bookmarks is safe and required to filter the parent query by the joined table
     const bookmarkedQuery = `
       *,
-      profiles:profiles!user_id ( username, display_name, avatar_url ),
+      profiles:profiles!user_id ( username, display_name, avatar_url, scholarly_score ),
       likes ( user_id ),
       bookmarks!inner ( user_id ),
       group:groups ( name )

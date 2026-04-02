@@ -8,11 +8,13 @@ import { useRouter } from 'next/navigation';
 import { PROFILE_COLORS, ALL_AVATAR_ICONS } from '../../../features/profile/edit-profile/config/avatarOptions';
 import { SmartText } from '../../../shared/ui/SmartText';
 import { getVersePath } from '@/shared/lib/reference-navigation';
+import { UserBadge } from '../../../entities/user/ui/UserBadge';
 
 export interface ProfileData {
   username?: string;
   display_name?: string;
   avatar_url?: string;
+  scholarly_score?: number;
 }
 
 export interface Comment {
@@ -187,6 +189,7 @@ export const CommentItem = ({
     >
       
       <div className="flex items-center justify-between gap-2">
+        {/* User Identity - Left Side */}
         <div className="flex items-center gap-1.5 flex-wrap min-w-0">
           <div className={`w-6 h-6 rounded-full flex items-center justify-center shrink-0 overflow-hidden border border-white dark:border-slate-800 transition-colors ${avatarBgClass || 'bg-indigo-100 dark:bg-indigo-900/50'} ${avatarTextClass}`}>
             {isExternalImage ? (
@@ -199,6 +202,10 @@ export const CommentItem = ({
           </div>
           <span className={`text-xs font-bold truncate ${isResolved ? 'text-blue-50' : 'text-slate-900 dark:text-slate-100'}`}>{displayName}</span>
           
+          {profile?.scholarly_score !== undefined && (
+            <UserBadge score={profile.scholarly_score} />
+          )}
+
           {replyingToName && (
             <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded flex items-center gap-1 shrink-0 ${isResolved ? 'bg-blue-700/50 text-blue-100' : 'bg-slate-100 dark:bg-slate-800 text-slate-500'}`}>
               <Reply size={8} className="rotate-180" /> {replyingToName}
@@ -210,16 +217,20 @@ export const CommentItem = ({
                via {groupData.name}
              </span>
           )}
-
-          <span className={`text-[9px] font-medium shrink-0 ${isResolved ? 'text-blue-200/80' : 'text-slate-400'}`}>{relativeTimestamp}</span>
         </div>
 
+        {/* Actions & Metadata - Right Side */}
         <div className="flex items-center gap-1 shrink-0">
           {showNewBadge && <span className="text-[9px] font-black uppercase tracking-widest px-1.5 py-0.5 rounded bg-blue-100 dark:bg-blue-900/40 text-blue-600 dark:text-blue-400 mr-1 animate-in fade-in zoom-in-75">New</span>}
           {showNewRepliesBadge && <span className="text-[9px] font-black uppercase tracking-widest px-1.5 py-0.5 rounded bg-emerald-100 dark:bg-emerald-900/40 text-emerald-600 dark:text-emerald-400 mr-1 animate-in fade-in zoom-in-75">New Replies</span>}
           {isResolved && <span className="flex items-center text-blue-300 mr-1"><CheckCircle2 size={16} /></span>}
           
-          {/* Bookmark Button - Only available on top-level comments */}
+          {/* Order 1: Timestamp */}
+          <span className={`text-[9px] font-medium shrink-0 mr-1 ${isResolved ? 'text-blue-200/80' : 'text-slate-400'}`}>
+            {relativeTimestamp}
+          </span>
+
+          {/* Order 2: Bookmark Button - Only available on top-level comments */}
           {currentUserId && comment.group_id !== null && !comment.parent_id && (
             <button
               onClick={(e) => { e.stopPropagation(); onBookmarkClick?.(); }}
@@ -234,6 +245,7 @@ export const CommentItem = ({
             </button>
           )}
 
+          {/* Order 3: 3-Dot Menu */}
           {isAuthor && (
             <div className="relative" ref={menuRef}>
               <button onClick={(e) => { e.stopPropagation(); setIsMenuOpen(!isMenuOpen); }} className={`flex items-center justify-center p-1 transition-all duration-200 outline-none ${isContainerHovered || isMenuOpen ? 'opacity-100' : 'opacity-0'} ${isResolved ? 'text-white' : isMenuOpen ? 'text-slate-900 dark:text-white' : 'text-slate-500'}`} aria-label="Comment options"><MoreVertical size={18} /></button>
