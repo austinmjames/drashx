@@ -89,11 +89,13 @@ export const VerseCard = ({
 
   const verseNumber = verse.verse_num || verse.verse_number || 0;
 
+  // Boost Z-index when hovered or active so lexicon tooltips appear OVER adjacent cards.
+  // We removed overflow-hidden to prevent clipping.
   const stateClasses = active 
-    ? "bg-indigo-50/50 dark:bg-indigo-900/20 border-indigo-200" 
+    ? "bg-indigo-50/50 dark:bg-indigo-900/20 border-indigo-200 z-20" 
     : isHovered 
-      ? "bg-slate-50 dark:bg-slate-800/50 border-slate-200 dark:border-slate-800" 
-      : "bg-transparent border-slate-200 dark:border-slate-800";
+      ? "bg-slate-50 dark:bg-slate-800/50 border-slate-200 dark:border-slate-800 z-30" 
+      : "bg-transparent border-slate-200 dark:border-slate-800 z-0";
 
   const handleCardClick = () => {
     if (currentStatus === 'unread') {
@@ -108,7 +110,7 @@ export const VerseCard = ({
       onClick={handleCardClick}
       onMouseEnter={() => setIsHovered(true)}
       onMouseLeave={() => setIsHovered(false)}
-      className={`p-6 border-b transition-all cursor-pointer group relative overflow-hidden ${stateClasses}`}
+      className={`p-6 border-b transition-all cursor-pointer group relative isolate ${stateClasses}`}
     >
       {/* LEFT SIDE: Unread Status Indicator - Vertically Centered */}
       {currentStatus === 'unread' && (

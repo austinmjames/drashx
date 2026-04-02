@@ -1,19 +1,30 @@
 // Path: src/views/reader/ui/ReaderPage.tsx
 "use client";
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useRouter, useParams, useSearchParams } from 'next/navigation';
 import { User as SupabaseUser } from '@supabase/supabase-js';
+import dynamic from 'next/dynamic';
 import { supabase } from '../../../shared/api/supabase';
 import { VerseCard, Verse } from '../../../entities/verse/ui/VerseCard';
-import { AuthForm } from '../../../features/auth/ui/AuthForm';
-import { ProfileSettings } from '../../../features/profile/edit-profile/ui/ProfileSettings';
 import { TableOfContents } from '../../../widgets/table-of-contents/ui/TableOfContents';
-import { GroupManagementModal } from '../../../features/groups/manage-groups/ui/GroupManagementModal';
 import { ReaderHeader } from '../../../widgets/reader-header/ui/ReaderHeader';
 import { InsightsPanel } from '../../../widgets/insights-panel/ui/InsightsPanel';
-import { LexiconModal } from '../../../features/lexicon/ui/LexiconModal';
 import { AlertCircle, User as UserIcon } from 'lucide-react';
+
+// --- Lazy Loaded Components ---
+const GroupManagementModal = dynamic(() => 
+  import('../../../features/groups/manage-groups/ui/GroupManagementModal').then(mod => mod.GroupManagementModal)
+);
+const LexiconModal = dynamic(() => 
+  import('../../../features/lexicon/ui/LexiconModal').then(mod => mod.LexiconModal)
+);
+const AuthForm = dynamic(() => 
+  import('../../../features/auth/ui/AuthForm').then(mod => mod.AuthForm)
+);
+const ProfileSettings = dynamic(() => 
+  import('../../../features/profile/edit-profile/ui/ProfileSettings').then(mod => mod.ProfileSettings)
+);
 
 let globalIsSidebarOpen = true;
 
@@ -35,7 +46,14 @@ const VerseSkeleton = () => (
   </div>
 );
 
-export const ReaderPage = ({ bookName, chapterNumber }: { bookName?: string; chapterNumber?: number }) => {
+interface ReaderPageProps {
+  bookName?: string;
+  chapterNumber?: number;
+  initialVerses?: Verse[]; // Added for Server-Side Fetching
+  initialHebrewTitle?: string; // Added for Server-Side Fetching
+}
+
+export const ReaderPage = ({ bookName, chapterNumber, initialVerses, initialHebrewTitle }: ReaderPageProps) => {
   const router = useRouter();
   const params = useParams();
   const searchParams = useSearchParams();
@@ -58,12 +76,17 @@ export const ReaderPage = ({ bookName, chapterNumber }: { bookName?: string; cha
 
   const activeBook = (params?.book as string) || String(bookName || 'Genesis');
   const activeChapter = Number(params?.chapter ?? chapterNumber ?? 1);
-  const [verses, setVerses] = useState<Verse[]>([]);
-  const [selectedVerse, setSelectedVerse] = useState<Verse | null>(null);
-  const [hebrewTitle, setHebrewTitle] = useState('');
-  const [isLoading, setIsLoading] = useState(true);
+
+  // --- State Initialization with Props (SSR Optimization) ---
+  const [verses, setVerses] = useState<Verse[]>(initialVerses || []);
+  const [hebrewTitle, setHebrewTitle] = useState(initialHebrewTitle || '');
+  const [isLoading, setIsLoading] = useState(!initialVerses); // Only load if props are missing
   const [fetchError, setFetchError] = useState<string | null>(null);
+  const [selectedVerse, setSelectedVerse] = useState<Verse | null>(null);
   const [selectedStrongs, setSelectedStrongs] = useState<string | null>(null);
+
+  // Track the version of data we currently have to avoid unnecessary flashes
+  const dataRef = useRef({ book: activeBook, chapter: activeChapter });
 
   // --- Navigation Support: Scrolling Logic ---
   const scrollToVerse = useCallback((vNum: number) => {
@@ -97,7 +120,7 @@ export const ReaderPage = ({ bookName, chapterNumber }: { bookName?: string; cha
     return () => window.removeEventListener('reader-jump-to-verse', handleJumpEvent);
   }, [activeBook, activeChapter, scrollToVerse]);
 
-  // --- Existing Logic ---
+  // --- Profile Preference Logic ---
   useEffect(() => {
     if (typeof window !== 'undefined' && window.innerWidth < 768) {
       setIsSidebarOpen(false);
@@ -185,18 +208,29 @@ export const ReaderPage = ({ bookName, chapterNumber }: { bookName?: string; cha
     updatePreference({ reader_hebrew_style: style });
   };
 
+  // --- Data Fetching Effect (Backup + Client-Side Navigation) ---
   useEffect(() => {
     const fetchVerses = async () => {
-      setIsLoading(true); setFetchError(null);
       const cleanBookName = activeBook && activeBook !== 'undefined' ? decodeURIComponent(activeBook).trim() : '';
+      
+      // Skip fetching if the currently loaded data matches the URL parameters
+      // This allows the initial SSR data to persist on first load.
+      if (dataRef.current.book === cleanBookName && dataRef.current.chapter === activeChapter && verses.length > 0) {
+        return;
+      }
+
+      setIsLoading(true); 
+      setFetchError(null);
+      
       try {
         const { data: bookData } = await supabase.from('books').select('*').ilike('name_en', cleanBookName).single();
         if (!bookData) throw new Error(`Book "${cleanBookName}" not found.`);
         setHebrewTitle(bookData.name_he);
         
-        // Fetch from reader_verses_view
         const { data: versesData } = await supabase.from('reader_verses_view').select('*').eq('book_id', bookData.name_en).eq('chapter_num', activeChapter).order('verse_num', { ascending: true });
+        
         setVerses((versesData || []) as Verse[]);
+        dataRef.current = { book: cleanBookName, chapter: activeChapter };
       } catch (err: unknown) { 
         const errorMessage = err instanceof Error ? err.message : String(err);
         setFetchError(errorMessage); 
@@ -204,8 +238,9 @@ export const ReaderPage = ({ bookName, chapterNumber }: { bookName?: string; cha
         setIsLoading(false); 
       }
     };
+
     if (activeBook) fetchVerses();
-  }, [activeBook, activeChapter]); 
+  }, [activeBook, activeChapter, verses.length]); 
 
   return (
     <div className="flex h-screen bg-white dark:bg-slate-950 overflow-hidden text-slate-900 dark:text-slate-100 relative">
@@ -234,7 +269,16 @@ export const ReaderPage = ({ bookName, chapterNumber }: { bookName?: string; cha
             hebrewStyle={hebrewStyle} setHebrewStyle={handleSetHebrewStyle}
           />
           <div className="max-w-3xl mx-auto py-6 md:py-8 w-full flex-1 md:px-6">
-            {isLoading ? <div className="space-y-4">{[...Array(6)].map((_, i) => <VerseSkeleton key={i} />)}</div> : fetchError ? <div className="flex flex-col items-center justify-center h-64 text-rose-500 gap-4"><AlertCircle size={48}/><p>{fetchError}</p></div> : 
+            {isLoading ? (
+              <div className="space-y-4">
+                {[...Array(6)].map((_, i) => <VerseSkeleton key={i} />)}
+              </div>
+            ) : fetchError ? (
+              <div className="flex flex-col items-center justify-center h-64 text-rose-500 gap-4">
+                <AlertCircle size={48}/>
+                <p>{fetchError}</p>
+              </div>
+            ) : (
               verses.map((v) => (
                 <div key={v.verse_id || v.id} id={`verse-${v.verse_num || v.verse_number}`} className="scroll-mt-24">
                   <VerseCard 
@@ -248,7 +292,7 @@ export const ReaderPage = ({ bookName, chapterNumber }: { bookName?: string; cha
                   />
                 </div>
               ))
-            }
+            )}
           </div>
         </section>
         <div className={`${isInsightsOpen ? 'translate-x-0' : 'translate-x-full md:translate-x-0'} absolute md:relative z-40 inset-y-0 right-0 h-full bg-white dark:bg-slate-950 md:bg-transparent transition-transform duration-300 w-full md:w-auto md:flex`}>
@@ -261,10 +305,42 @@ export const ReaderPage = ({ bookName, chapterNumber }: { bookName?: string; cha
         </div>
       </main>
 
-      {isManageGroupsOpen && user && <GroupManagementModal isOpen={isManageGroupsOpen} onClose={() => setIsManageGroupsOpen(false)} userId={user.id} onGroupsChange={fetchGroups} onGroupCreated={(id) => { fetchGroups(); handleSetActiveGroupId(id); }} />}
-      <LexiconModal strongsNumber={selectedStrongs} isOpen={!!selectedStrongs} onClose={() => setSelectedStrongs(null)} />
-      {showAuth && <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 p-4 backdrop-blur-sm"><div className="relative"><button onClick={() => setShowAuth(false)} className="absolute -top-12 right-0 text-white font-bold">Close</button><AuthForm /></div></div>}
-      {showProfile && user && <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 p-4 backdrop-blur-sm"><ProfileSettings userId={user.id} onClose={() => setShowProfile(false)} /></div>}
+      {/* Conditionally Render Lazy Loaded Components */}
+      {isManageGroupsOpen && user && (
+        <GroupManagementModal 
+          isOpen={isManageGroupsOpen} 
+          onClose={() => setIsManageGroupsOpen(false)} 
+          userId={user.id} 
+          onGroupsChange={fetchGroups} 
+          onGroupCreated={(id) => { fetchGroups(); handleSetActiveGroupId(id); }} 
+        />
+      )}
+      
+      {selectedStrongs && (
+        <LexiconModal 
+          strongsNumber={selectedStrongs} 
+          isOpen={!!selectedStrongs} 
+          onClose={() => setSelectedStrongs(null)} 
+          verseTranslation={verses.find(v => (v.words || []).some(w => w.strongs === selectedStrongs))?.text_en || ''}
+        />
+      )}
+
+      {showAuth && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 p-4 backdrop-blur-sm animate-in fade-in duration-200">
+          <div className="relative">
+            <button onClick={() => setShowAuth(false)} className="absolute -top-12 right-0 text-white font-bold hover:text-slate-200 transition-colors">Close</button>
+            <AuthForm />
+          </div>
+        </div>
+      )}
+
+      {showProfile && user && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 p-4 backdrop-blur-sm animate-in fade-in duration-200">
+          <ProfileSettings userId={user.id} onClose={() => setShowProfile(false)} />
+        </div>
+      )}
     </div>
   );
 };
+
+export default ReaderPage;
