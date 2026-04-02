@@ -1,7 +1,10 @@
 // Path: src/features/groups/manage-groups/ui/JoinGroupView.tsx
+"use client";
+
 import React, { useState } from 'react';
 import { Loader2, Info } from 'lucide-react';
 import { supabase } from '../../../../shared/api/supabase';
+import { useSearchParams, useRouter, usePathname } from 'next/navigation';
 
 interface JoinGroupViewProps {
   userId: string;
@@ -9,9 +12,16 @@ interface JoinGroupViewProps {
 }
 
 export const JoinGroupView = ({ userId, onSuccess }: JoinGroupViewProps) => {
+  const searchParams = useSearchParams();
+  const router = useRouter();
+  const pathname = usePathname();
+  const inviteParam = searchParams.get('invite');
+
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [joinCode, setJoinCode] = useState('');
+  
+  // Pre-fill the invite code if it exists in the URL
+  const [joinCode, setJoinCode] = useState(inviteParam || '');
 
   const handleJoinByCode = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -19,11 +29,34 @@ export const JoinGroupView = ({ userId, onSuccess }: JoinGroupViewProps) => {
     setError(null);
 
     try {
-      const { data: group, error: fErr } = await supabase.from('groups').select('id').eq('invite_code', joinCode.toUpperCase()).single();
+      // 1. Fetch the group AND its default access level
+      const { data: group, error: fErr } = await supabase
+        .from('groups')
+        .select('id, default_access_level')
+        .eq('invite_code', joinCode.toUpperCase())
+        .single();
+        
       if (fErr || !group) throw new Error("Invalid or expired invite code.");
 
-      const { error: jErr } = await supabase.from('group_members').insert({ group_id: group.id, user_id: userId, role: 'member' });
-      if (jErr) throw new Error("You are already a member of this group.");
+      // 2. Insert member and explicitly apply the inherited access level
+      const { error: jErr } = await supabase.from('group_members').insert({ 
+        group_id: group.id, 
+        user_id: userId, 
+        role: 'member',
+        access_level: group.default_access_level || 'full-access'
+      });
+      
+      if (jErr) {
+        if (jErr.code === '23505') throw new Error("You are already a member of this group.");
+        throw jErr;
+      }
+
+      // Clear the invite param from URL so the modal doesn't re-open indefinitely
+      if (inviteParam) {
+        const newParams = new URLSearchParams(searchParams.toString());
+        newParams.delete('invite');
+        router.replace(`${pathname}?${newParams.toString()}`);
+      }
 
       onSuccess(group.id);
     } catch (err: unknown) { 
@@ -37,6 +70,24 @@ export const JoinGroupView = ({ userId, onSuccess }: JoinGroupViewProps) => {
     }
   };
 
+  const handleCodeChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    let val = e.target.value;
+    
+    // Smart Parsing: If a user pastes the full URL, extract just the code
+    if (val.includes('drashx.com/')) {
+      val = val.split('drashx.com/')[1] || val;
+    } else if (val.includes('/')) {
+      val = val.split('/').pop() || val;
+    }
+    
+    // Strip any lingering query params
+    if (val.includes('?')) {
+      val = val.split('?')[0];
+    }
+    
+    setJoinCode(val.toUpperCase().replace(/[^A-Z0-9-]/g, ''));
+  };
+
   return (
     <div className="py-6 animate-in fade-in duration-300">
       {error && (
@@ -47,14 +98,14 @@ export const JoinGroupView = ({ userId, onSuccess }: JoinGroupViewProps) => {
 
       <div className="text-center space-y-1 mb-8">
         <h3 className="text-base font-medium text-slate-900 dark:text-white">Have an invite code?</h3>
-        <p className="text-xs text-slate-500">Enter the unique code below.</p>
+        <p className="text-xs text-slate-500">Enter the unique code or paste the URL below.</p>
       </div>
 
       <form onSubmit={handleJoinByCode} className="space-y-8 max-w-sm mx-auto">
         <input 
           aria-label="Invite code"
           value={joinCode}
-          onChange={(e) => setJoinCode(e.target.value.toUpperCase().replace(/[^A-Z0-9-]/g, ''))}
+          onChange={handleCodeChange}
           placeholder="ENTER-CODE"
           className="w-full bg-transparent border-b border-slate-200 py-3 text-center text-3xl font-mono tracking-[0.5em] outline-none focus:border-slate-900 dark:focus:border-white transition-colors uppercase"
         />

@@ -5,12 +5,11 @@ import {
   Star, Flame, Compass, Heart, Hash, ChevronDown, Scroll, Sun, 
   Moon, Cloud, Mountain, Trees, Anchor, Award, Bell, Briefcase, 
   Calendar, Camera, Coffee, Database, Gift, Home, Key, Map, 
-  Music, Rocket, Target, Terminal, Zap, Shield,
-  // New Additions: Religious/Symbolic/Spiritual (non-cross)
-  Hand, Tent, Waves, Grape, Wheat, Bird, Crown, Gem, Feather, 
-  Sprout, Scale, Fingerprint, Flower2, Rainbow, TreePalm, Wind, 
-  Apple, Milk, Library, HeartHandshake, Infinity, LifeBuoy, Trophy, 
-  Hourglass, ShieldCheck, Sunrise, Sparkles, MapPin, Lamp
+  Music, Rocket, Target, Terminal, Zap, Shield, Hand, Tent, Waves, 
+  Grape, Wheat, Bird, Crown, Gem, Feather, Sprout, Scale, 
+  Fingerprint, Flower2, Rainbow, TreePalm, Wind, Apple, Milk, 
+  Library, HeartHandshake, Infinity, LifeBuoy, Trophy, Hourglass, 
+  ShieldCheck, Sunrise, Sparkles, MapPin, Lamp, Copy, Check, Eye, MessageCircle
 } from 'lucide-react';
 import { supabase } from '../../../../shared/api/supabase';
 
@@ -20,14 +19,10 @@ interface CreateGroupViewProps {
 }
 
 type VisibilityType = 'open' | 'unlisted' | 'invite-only';
+type AccessLevel = 'view-only' | 'reply-only' | 'full-access';
 
 const generateRandomCode = () => Math.random().toString(36).substring(2, 8).toUpperCase();
 
-/**
- * Expanded ICON_OPTIONS
- * Added ~30 new icons focusing on community, nature, symbols of Israel, 
- * justice, and spiritual growth.
- */
 export const ICON_OPTIONS = [
   // Original Set
   { id: 'book', icon: Book },
@@ -63,37 +58,37 @@ export const ICON_OPTIONS = [
   { id: 'zap', icon: Zap },
   { id: 'shield', icon: Shield },
   
-  // New Expanded Set (Spiritual/Biblical context)
-  { id: 'hand', icon: Hand },           // Blessing/Priestly
-  { id: 'tent', icon: Tent },           // Tabernacle/Ohel
-  { id: 'waves', icon: Waves },         // Water/Mikvah
-  { id: 'grape', icon: Grape },         // Vineyard/Israel
-  { id: 'wheat', icon: Wheat },         // Harvest/Shavuot
-  { id: 'bird', icon: Bird },           // Dove/Peace
-  { id: 'crown', icon: Crown },         // Kingship
-  { id: 'gem', icon: Gem },             // Breastplate/Valuable
-  { id: 'feather', icon: Feather },     // Scribe/Torah
-  { id: 'sprout', icon: Sprout },       // Growth
-  { id: 'scale', icon: Scale },         // Justice/Mishpat
-  { id: 'fingerprint', icon: Fingerprint }, // Creation/Identity
-  { id: 'flower', icon: Flower2 },      // Nature
-  { id: 'rainbow', icon: Rainbow },     // Covenant
-  { id: 'palm', icon: TreePalm },       // Lulav/Victory
-  { id: 'wind', icon: Wind },           // Ruach
-  { id: 'apple', icon: Apple },         // Garden/Rosh Hashanah
-  { id: 'milk', icon: Milk },           // Land of Promise
-  { id: 'library', icon: Library },     // Study/Beit Midrash
-  { id: 'covenant', icon: HeartHandshake }, // Chessed
-  { id: 'eternal', icon: Infinity },    // Eternal
-  { id: 'salvation', icon: LifeBuoy },  // Help
-  { id: 'victory', icon: Trophy },      // Triumph
-  { id: 'history', icon: Hourglass },   // Time/Generations
-  { id: 'protection', icon: ShieldCheck }, // Magen
-  { id: 'nations', icon: Globe },       // Universal
-  { id: 'dawn', icon: Sunrise },        // Awakening
-  { id: 'holiness', icon: Sparkles },   // Kadosh
-  { id: 'location', icon: MapPin },     // Land
-  { id: 'lamp', icon: Lamp }            // Ner Tamid/Wisdom
+  // New Expanded Set
+  { id: 'hand', icon: Hand },           
+  { id: 'tent', icon: Tent },           
+  { id: 'waves', icon: Waves },         
+  { id: 'grape', icon: Grape },         
+  { id: 'wheat', icon: Wheat },         
+  { id: 'bird', icon: Bird },           
+  { id: 'crown', icon: Crown },         
+  { id: 'gem', icon: Gem },             
+  { id: 'feather', icon: Feather },     
+  { id: 'sprout', icon: Sprout },       
+  { id: 'scale', icon: Scale },         
+  { id: 'fingerprint', icon: Fingerprint }, 
+  { id: 'flower', icon: Flower2 },      
+  { id: 'rainbow', icon: Rainbow },     
+  { id: 'palm', icon: TreePalm },       
+  { id: 'wind', icon: Wind },           
+  { id: 'apple', icon: Apple },         
+  { id: 'milk', icon: Milk },           
+  { id: 'library', icon: Library },     
+  { id: 'covenant', icon: HeartHandshake }, 
+  { id: 'eternal', icon: Infinity },    
+  { id: 'salvation', icon: LifeBuoy },  
+  { id: 'victory', icon: Trophy },      
+  { id: 'history', icon: Hourglass },   
+  { id: 'protection', icon: ShieldCheck }, 
+  { id: 'nations', icon: Globe },       
+  { id: 'dawn', icon: Sunrise },        
+  { id: 'holiness', icon: Sparkles },   
+  { id: 'location', icon: MapPin },     
+  { id: 'lamp', icon: Lamp }            
 ];
 
 export const COLOR_OPTIONS = [
@@ -114,8 +109,10 @@ export const CreateGroupView = ({ userId, onSuccess }: CreateGroupViewProps) => 
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
   const [visibility, setVisibility] = useState<VisibilityType>('open');
+  const [defaultAccess, setDefaultAccess] = useState<AccessLevel>('full-access');
   const [tags, setTags] = useState<string[]>(['', '', '']);
   const [customInviteCode, setCustomInviteCode] = useState(generateRandomCode());
+  const [copied, setCopied] = useState(false);
   
   // Icon & Color Dropdown States
   const [selectedIconId, setSelectedIconId] = useState('book');
@@ -146,23 +143,39 @@ export const CreateGroupView = ({ userId, onSuccess }: CreateGroupViewProps) => 
     setTags(newTags);
   };
 
+  const handleCopyLink = () => {
+    const url = `https://www.drashx.com/${customInviteCode}`;
+    const textArea = document.createElement("textarea");
+    textArea.value = url;
+    document.body.appendChild(textArea);
+    textArea.select();
+    try {
+      document.execCommand("copy");
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch (err) {
+      console.error("Fallback copy failed", err);
+    }
+    textArea.remove();
+  };
+
   const handleCreateGroup = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsLoading(true);
     setError(null);
 
     try {
-      const finalInviteCode = visibility !== 'invite-only' ? customInviteCode : null;
-      if (finalInviteCode) {
-        const { data: existing } = await supabase.from('groups').select('id').eq('invite_code', finalInviteCode).maybeSingle();
-        if (existing) throw new Error(`Code "${finalInviteCode}" is taken.`);
-      }
+      const finalInviteCode = customInviteCode.trim() || generateRandomCode();
+      
+      const { data: existing } = await supabase.from('groups').select('id').eq('invite_code', finalInviteCode).maybeSingle();
+      if (existing) throw new Error(`Code "${finalInviteCode}" is taken.`);
       
       const { data: group, error: gErr } = await supabase.from('groups')
         .insert({ 
           name, 
           description, 
           visibility, 
+          default_access_level: defaultAccess,
           tags: tags.filter(t => t.trim() !== ''), 
           owner_id: userId, 
           invite_code: finalInviteCode,
@@ -173,10 +186,12 @@ export const CreateGroupView = ({ userId, onSuccess }: CreateGroupViewProps) => 
 
       if (gErr) throw gErr;
 
+      // Group creator always gets 'full-access' regardless of default setting
       const { error: mErr } = await supabase.from('group_members').insert({ 
         group_id: group.id, 
         user_id: userId, 
-        role: 'owner' 
+        role: 'owner',
+        access_level: 'full-access'
       });
 
       if (mErr) throw mErr;
@@ -340,7 +355,7 @@ export const CreateGroupView = ({ userId, onSuccess }: CreateGroupViewProps) => 
                   className={`flex items-center gap-3 py-2 px-3 rounded-xl text-xs transition-all ${
                     visibility === typedId 
                       ? 'bg-indigo-50 dark:bg-indigo-900/40 text-indigo-700 dark:text-indigo-300 font-bold border border-indigo-100 dark:border-indigo-900' 
-                      : 'text-slate-500 border border-transparent hover:bg-slate-50'
+                      : 'text-slate-500 border border-transparent hover:bg-slate-50 dark:hover:bg-slate-800/50'
                   }`}
                 >
                   <v.icon size={16} className={visibility === typedId ? 'text-indigo-500' : ''} />
@@ -351,37 +366,81 @@ export const CreateGroupView = ({ userId, onSuccess }: CreateGroupViewProps) => 
           </div>
         </div>
 
-        <div className="space-y-1">
-           <label className="text-[10px] font-black uppercase text-slate-400 tracking-[0.2em]">Topic Tags</label>
-           <div className="flex flex-col gap-2 pt-1">
-             {tags.map((tag, idx) => (
-               <div key={idx} className="flex items-center border-b border-slate-100 dark:border-slate-800 focus-within:border-indigo-500 transition-colors">
-                 <span className="text-slate-300 dark:text-slate-600 text-xs mr-1">#</span>
-                 <input 
-                    aria-label={`Tag ${idx + 1}`} 
-                    value={tag} 
-                    onChange={(e) => handleTagChange(idx, e.target.value)} 
-                    className="w-full bg-transparent py-1 text-sm outline-none" 
-                    placeholder="tag" 
-                 />
-               </div>
-             ))}
-           </div>
+        <div className="space-y-3">
+          <label className="text-[10px] font-black uppercase text-slate-400 tracking-[0.2em] flex items-center gap-1">
+            Default Member Role
+            <span className="group relative cursor-help">
+              <Info size={12} className="text-slate-300 hover:text-indigo-500" />
+              <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 w-48 p-2 bg-slate-800 text-white text-[10px] rounded-lg opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-50 normal-case tracking-normal">
+                Determines what new members can do. You can change this per-member later.
+              </div>
+            </span>
+          </label>
+          <div className="flex flex-col gap-2">
+            {[
+              { id: 'full-access', icon: MessageSquare, label: 'Full Access' }, 
+              { id: 'reply-only', icon: MessageCircle, label: 'Reply Only' }, 
+              { id: 'view-only', icon: Eye, label: 'View Only' }
+            ].map((v) => {
+              const typedId = v.id as AccessLevel;
+              return (
+                <button 
+                  key={v.id} 
+                  type="button" 
+                  onClick={() => setDefaultAccess(typedId)} 
+                  title={`Set default role to ${v.label}`}
+                  className={`flex items-center gap-3 py-2 px-3 rounded-xl text-xs transition-all ${
+                    defaultAccess === typedId 
+                      ? 'bg-emerald-50 dark:bg-emerald-900/40 text-emerald-700 dark:text-emerald-300 font-bold border border-emerald-100 dark:border-emerald-900' 
+                      : 'text-slate-500 border border-transparent hover:bg-slate-50 dark:hover:bg-slate-800/50'
+                  }`}
+                >
+                  <v.icon size={16} className={defaultAccess === typedId ? 'text-emerald-500' : ''} />
+                  <span>{v.label}</span>
+                </button>
+              );
+            })}
+          </div>
         </div>
+      </div>
+      
+      <div className="space-y-1">
+         <label className="text-[10px] font-black uppercase text-slate-400 tracking-[0.2em]">Topic Tags</label>
+         <div className="flex flex-col sm:flex-row gap-2 pt-1">
+           {tags.map((tag, idx) => (
+             <div key={idx} className="flex-1 flex items-center border-b border-slate-100 dark:border-slate-800 focus-within:border-indigo-500 transition-colors">
+               <span className="text-slate-300 dark:text-slate-600 text-xs mr-1">#</span>
+               <input 
+                  aria-label={`Tag ${idx + 1}`} 
+                  value={tag} 
+                  onChange={(e) => handleTagChange(idx, e.target.value)} 
+                  className="w-full bg-transparent py-1 text-sm outline-none" 
+                  placeholder="tag" 
+               />
+             </div>
+           ))}
+         </div>
       </div>
 
       <div className="space-y-1 pt-2">
-        <label className="text-[10px] font-black uppercase text-slate-400 tracking-[0.2em]" htmlFor="invite-code">Custom Invite Code</label>
+        <label className="text-[10px] font-black uppercase text-slate-400 tracking-[0.2em]" htmlFor="invite-code">Custom Invite Link</label>
         <div className="flex items-center">
           <span className="text-slate-400 dark:text-slate-500 bg-slate-50 dark:bg-slate-900 py-2.5 pl-3 pr-1 rounded-l-2xl font-mono text-[10px] border border-r-0 border-slate-100 dark:border-slate-800 uppercase tracking-tighter">drashx.com/</span>
           <input 
             id="invite-code"
             value={customInviteCode} 
             onChange={(e) => setCustomInviteCode(e.target.value.toUpperCase().replace(/[^A-Z0-9-]/g, ''))} 
-            disabled={visibility === 'invite-only'} 
             placeholder="CUSTOM-CODE" 
-            className="w-full bg-slate-50 dark:bg-slate-900 border border-l-0 border-slate-100 dark:border-slate-800 py-2 px-3 rounded-r-2xl font-mono text-sm outline-none focus:border-indigo-500 dark:focus:border-indigo-400 disabled:opacity-50 transition-colors uppercase" 
+            className="w-full bg-slate-50 dark:bg-slate-900 border border-x-0 border-slate-100 dark:border-slate-800 py-2 px-3 font-mono text-sm outline-none focus:border-indigo-500 dark:focus:border-indigo-400 transition-colors uppercase" 
           />
+          <button 
+            type="button" 
+            onClick={handleCopyLink}
+            title="Copy Invite Link"
+            className="bg-slate-50 dark:bg-slate-900 border border-l-0 border-slate-100 dark:border-slate-800 py-2.25 px-4 rounded-r-2xl text-slate-400 hover:text-indigo-600 transition-colors flex items-center justify-center"
+          >
+            {copied ? <Check size={16} className="text-emerald-500" /> : <Copy size={16} />}
+          </button>
         </div>
       </div>
 

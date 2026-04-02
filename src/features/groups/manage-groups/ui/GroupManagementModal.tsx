@@ -6,6 +6,7 @@ import { CreateGroupView, ICON_OPTIONS, COLOR_OPTIONS } from './CreateGroupView'
 import { JoinGroupView } from './JoinGroupView';
 import { DiscoverGroupsView } from './DiscoverGroupsView';
 import { ManageGroupView } from './ManageGroupView';
+import { useSearchParams } from 'next/navigation';
 
 interface GroupManagementModalProps {
   isOpen: boolean;
@@ -20,6 +21,7 @@ export interface GroupData {
   name: string;
   description?: string;
   visibility: 'open' | 'unlisted' | 'invite-only';
+  default_access_level?: 'view-only' | 'reply-only' | 'full-access';
   tags?: string[];
   invite_code?: string;
   owner_id: string;
@@ -29,6 +31,7 @@ export interface GroupData {
 
 export interface GroupMemberData {
   role: 'owner' | 'admin' | 'member';
+  access_level?: 'view-only' | 'reply-only' | 'full-access';
   groups: GroupData;
 }
 
@@ -41,7 +44,12 @@ export const GroupManagementModal = ({
   onGroupsChange,
   onGroupCreated 
 }: GroupManagementModalProps) => {
-  const [mode, setMode] = useState<ModalMode>('manage');
+  const searchParams = useSearchParams();
+  const inviteParam = searchParams.get('invite');
+  
+  // Default to the join tab if an invite code is present in the URL
+  const [mode, setMode] = useState<ModalMode>(inviteParam ? 'join' : 'manage');
+  
   const [managingGroup, setManagingGroup] = useState<GroupMemberData | null>(null);
   const [myGroups, setMyGroups] = useState<GroupMemberData[]>([]);
   const [isLoadingGroups, setIsLoadingGroups] = useState(true);
@@ -57,7 +65,7 @@ export const GroupManagementModal = ({
     try {
       const { data, error } = await supabase
         .from('group_members')
-        .select('role, groups(*)')
+        .select('role, access_level, groups(*)')
         .eq('user_id', userId);
         
       if (error) throw error;
@@ -201,7 +209,9 @@ export const GroupManagementModal = ({
                                 <h4 className={`font-black text-sm transition-colors ${isHovered ? ThemeColor.text : 'text-slate-900 dark:text-white'}`}>
                                   {mg.groups.name}
                                 </h4>
-                                <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest mt-0.5">{mg.role}</p>
+                                <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest mt-0.5">
+                                  {mg.role} {mg.access_level && mg.access_level !== 'full-access' && `• ${mg.access_level.replace('-', ' ')}`}
+                                </p>
                               </div>
                             </div>
                             <Settings className={`text-slate-300 transition-all ${isHovered ? 'rotate-90 text-indigo-500' : 'opacity-0'}`} size={16} />

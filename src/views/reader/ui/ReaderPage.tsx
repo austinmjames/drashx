@@ -39,12 +39,14 @@ export const ReaderPage = ({ bookName, chapterNumber }: { bookName?: string; cha
   const router = useRouter();
   const params = useParams();
   const searchParams = useSearchParams();
+  const inviteParam = searchParams.get('invite');
   
   const [isSidebarOpen, setIsSidebarOpen] = useState(globalIsSidebarOpen);
   const [isInsightsOpen, setIsInsightsOpen] = useState(false);
   const [isManageGroupsOpen, setIsManageGroupsOpen] = useState(false);
   const [showAuth, setShowAuth] = useState(false);
   const [showProfile, setShowProfile] = useState(false);
+  const [isAuthSettled, setIsAuthSettled] = useState(false);
   
   const [languageMode, setLanguageMode] = useState<'both' | 'en' | 'he'>('both');
   const [translation, setTranslation] = useState<'jps1917' | 'modernized'>('jps1917');
@@ -119,10 +121,13 @@ export const ReaderPage = ({ bookName, chapterNumber }: { bookName?: string; cha
     supabase.auth.getSession().then(({ data: { session } }) => {
       setUser(session?.user ?? null);
       if (session?.user) fetchUserProfilePreference(session.user.id);
+      setIsAuthSettled(true);
     });
+    
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
       const currentUser = session?.user ?? null;
       setUser(currentUser);
+      setIsAuthSettled(true);
       if (session) { 
         setShowAuth(false); 
         fetchUserProfilePreference(session.user.id);
@@ -133,6 +138,17 @@ export const ReaderPage = ({ bookName, chapterNumber }: { bookName?: string; cha
     });
     return () => subscription.unsubscribe();
   }, [fetchUserProfilePreference]);
+
+  // --- Invite Link Interceptor ---
+  useEffect(() => {
+    if (isAuthSettled && inviteParam) {
+      if (user) {
+        setIsManageGroupsOpen(true);
+      } else {
+        setShowAuth(true);
+      }
+    }
+  }, [isAuthSettled, inviteParam, user]);
 
   const fetchGroups = useCallback(async () => {
     if (!user) return;
@@ -178,7 +194,7 @@ export const ReaderPage = ({ bookName, chapterNumber }: { bookName?: string; cha
         if (!bookData) throw new Error(`Book "${cleanBookName}" not found.`);
         setHebrewTitle(bookData.name_he);
         
-        // Fetch from reader_verses_view (which should now include latest_comment_at)
+        // Fetch from reader_verses_view
         const { data: versesData } = await supabase.from('reader_verses_view').select('*').eq('book_id', bookData.name_en).eq('chapter_num', activeChapter).order('verse_num', { ascending: true });
         setVerses((versesData || []) as Verse[]);
       } catch (err: unknown) { 
