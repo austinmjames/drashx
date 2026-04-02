@@ -1,7 +1,7 @@
 // Filepath: src/widgets/admin/ui/BroadcastWidget.tsx
 'use client';
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { 
   Megaphone, 
   DollarSign, 
@@ -10,7 +10,13 @@ import {
   Clock,
   Info,
   FileText,
-  Loader2
+  Loader2,
+  Trash2,
+  Power,
+  PowerOff,
+  AlertTriangle,
+  TrendingUp,
+  Target
 } from 'lucide-react';
 import { Card } from '@/shared/ui/Card';
 import { supabase } from '@/shared/api/supabase';
@@ -46,7 +52,11 @@ export const BroadcastWidget = () => {
   const [targetAudience, setTargetAudience] = useState<'all' | 'new' | 'returning'>('all');
   const [pollOptions, setPollOptions] = useState<string[]>(['', '']);
   const [allowCustom, setAllowCustom] = useState(false);
+  
+  // Action States
   const [isDeploying, setIsDeploying] = useState(false);
+  const [processingId, setProcessingId] = useState<string | null>(null);
+  const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
 
   const fetchHistory = useCallback(async () => {
     setLoading(true);
@@ -55,7 +65,7 @@ export const BroadcastWidget = () => {
         .from('broadcasts')
         .select('*')
         .order('created_at', { ascending: false })
-        .limit(5);
+        .limit(10);
 
       if (bErr) throw bErr;
 
@@ -102,6 +112,16 @@ export const BroadcastWidget = () => {
     fetchHistory();
   }, [fetchHistory]);
 
+  // Aggregated charts data
+  const globalStats = useMemo(() => {
+    if (!history.length) return { reach: 0, clicks: 0, responses: 0 };
+    return history.reduce((acc, curr) => ({
+      reach: acc.reach + curr.impressions,
+      clicks: acc.clicks + curr.clicks,
+      responses: acc.responses + curr.responses.reduce((a, b) => a + b.count, 0)
+    }), { reach: 0, clicks: 0, responses: 0 });
+  }, [history]);
+
   const handleDeploy = async () => {
     if (!title || !content) return;
     setIsDeploying(true);
@@ -136,8 +156,43 @@ export const BroadcastWidget = () => {
     }
   };
 
+  const toggleBroadcastStatus = async (id: string, currentStatus: boolean) => {
+    setProcessingId(id);
+    try {
+      const { error } = await supabase
+        .from('broadcasts')
+        .update({ is_active: !currentStatus })
+        .eq('id', id);
+      
+      if (error) throw error;
+      setHistory(prev => prev.map(item => item.id === id ? { ...item, is_active: !currentStatus } : item));
+    } catch (err) {
+      console.error("Failed to toggle status:", err);
+    } finally {
+      setProcessingId(null);
+    }
+  };
+
+  const deleteBroadcast = async (id: string) => {
+    setProcessingId(id);
+    try {
+      const { error } = await supabase
+        .from('broadcasts')
+        .delete()
+        .eq('id', id);
+      
+      if (error) throw error;
+      setHistory(prev => prev.filter(item => item.id !== id));
+      setDeleteConfirmId(null);
+    } catch (err) {
+      console.error("Failed to delete broadcast:", err);
+    } finally {
+      setProcessingId(null);
+    }
+  };
+
   return (
-    <Card className="mb-8">
+    <Card className="mb-8 overflow-visible">
       <div className="p-5 border-b border-gray-100 bg-blue-50/20">
         <h3 className="font-semibold text-gray-800 flex items-center gap-2">
           <Megaphone className="w-5 h-5 text-blue-600" />
@@ -146,17 +201,18 @@ export const BroadcastWidget = () => {
         <p className="text-xs text-gray-500 mt-1">Deploy global modals, polls, and announcements.</p>
       </div>
 
-      <div className="p-6 space-y-8">
-        <section className="bg-gray-50 rounded-xl p-5 border border-gray-100">
-          <h4 className="font-bold text-gray-900 mb-4 flex items-center gap-2">
+      <div className="p-6 space-y-10">
+        {/* Create Section */}
+        <section className="bg-gray-50 rounded-xl p-6 border border-gray-100">
+          <h4 className="font-bold text-gray-900 mb-6 flex items-center gap-2">
             <Plus className="w-4 h-4 text-blue-600" />
             Create New Broadcast
           </h4>
           
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
             <div className="space-y-4">
               <div>
-                <label className="block text-xs font-bold text-gray-500 uppercase tracking-wider mb-2">Type</label>
+                <label className="block text-xs font-bold text-gray-500 uppercase tracking-wider mb-2">Campaign Type</label>
                 <div className="grid grid-cols-3 gap-2">
                   <button onClick={() => setBroadcastType('announcement')} className={`flex flex-col items-center p-2 rounded-lg border transition-all ${broadcastType === 'announcement' ? 'bg-white border-violet-500 text-violet-600 shadow-sm' : 'bg-white border-gray-200 text-gray-500 hover:border-gray-300'}`}>
                     <Info className="w-4 h-4 mb-1" />
@@ -175,16 +231,16 @@ export const BroadcastWidget = () => {
 
               <div className="grid grid-cols-2 gap-4">
                 <div>
-                  <label className="block text-xs font-bold text-gray-500 uppercase tracking-wider mb-2">Target</label>
+                  <label className="block text-xs font-bold text-gray-500 uppercase tracking-wider mb-2">Target Audience</label>
                   <select 
                     value={targetAudience} 
                     title="Audience" 
                     onChange={(e) => setTargetAudience(e.target.value as 'all' | 'new' | 'returning')} 
                     className="w-full p-2.5 bg-white border border-gray-200 rounded-lg text-sm outline-none"
                   >
-                    <option value="all">All</option>
-                    <option value="new">New</option>
-                    <option value="returning">Returning</option>
+                    <option value="all">Everyone</option>
+                    <option value="new">New Users Only</option>
+                    <option value="returning">Returning Only</option>
                   </select>
                 </div>
                 <div>
@@ -205,22 +261,21 @@ export const BroadcastWidget = () => {
                   onChange={(e) => setFrequency(e.target.value)} 
                   className="w-full p-2.5 bg-white border border-gray-200 rounded-lg text-sm outline-none"
                 >
-                  <option value="once">Once Total</option>
+                  <option value="once">Once Per Account</option>
                   <option value="daily">Once Per Day</option>
                   <option value="weekly">Once Per Week</option>
-                  {/* "Every X Sessions" removed per request */}
                 </select>
               </div>
 
               <input 
                 type="text" 
-                placeholder="Title..." 
+                placeholder="Campaign Title..." 
                 value={title} 
                 onChange={(e) => setTitle(e.target.value)} 
-                className="w-full p-2.5 bg-white border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none"
+                className="w-full p-2.5 bg-white border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none font-bold"
               />
               <textarea 
-                placeholder="Message content..." 
+                placeholder="Broadcast message body content..." 
                 value={content} 
                 onChange={(e) => setContent(e.target.value)} 
                 rows={3}
@@ -231,7 +286,7 @@ export const BroadcastWidget = () => {
             <div className="space-y-4">
               {broadcastType === 'poll' ? (
                 <div className="bg-teal-50/50 p-4 rounded-xl border border-teal-100 h-full flex flex-col">
-                  <p className="text-xs font-bold text-teal-800 uppercase mb-3">Options</p>
+                  <p className="text-xs font-bold text-teal-800 uppercase mb-3">Poll Options</p>
                   <div className="space-y-2 mb-4 grow">
                     {pollOptions.map((opt, i) => (
                       <input 
@@ -250,88 +305,191 @@ export const BroadcastWidget = () => {
                     <button onClick={() => setPollOptions([...pollOptions, ''])} className="text-[10px] font-bold text-teal-600 flex items-center gap-1">
                       <Plus className="w-3 h-3" /> Add Option
                     </button>
-                    <div className="flex items-center gap-2 mt-4">
-                      <input type="checkbox" id="allow-custom" checked={allowCustom} onChange={(e) => setAllowCustom(e.target.checked)} />
-                      <label htmlFor="allow-custom" className="text-[10px] font-bold text-gray-500 uppercase">Allow Custom</label>
+                    <div className="flex items-center gap-2 mt-4 pt-4 border-t border-teal-100">
+                      <input type="checkbox" id="allow-custom" checked={allowCustom} onChange={(e) => setAllowCustom(e.target.checked)} className="rounded text-teal-600 focus:ring-teal-500" />
+                      <label htmlFor="allow-custom" className="text-[10px] font-bold text-gray-500 uppercase cursor-pointer">Allow Custom Feedback</label>
                     </div>
                   </div>
                 </div>
               ) : (
-                <div className="bg-gray-100/50 p-4 rounded-xl border border-gray-200 h-full flex items-center justify-center text-center">
-                  <p className="text-xs text-gray-400 italic">No additional config needed for {broadcastType}.</p>
+                <div className="bg-white/50 p-4 rounded-xl border border-gray-200 h-full flex flex-col items-center justify-center text-center">
+                  <Megaphone className={`w-8 h-8 mb-2 ${broadcastType === 'donation' ? 'text-blue-200' : 'text-violet-200'}`} />
+                  <p className="text-xs text-gray-400 italic">No complex configuration needed for {broadcastType}s.</p>
                 </div>
               )}
               
               <button 
                 disabled={isDeploying || !title || !content}
                 onClick={handleDeploy}
-                className="w-full py-3 bg-blue-600 text-white rounded-lg font-bold text-sm hover:bg-blue-700 transition-all disabled:opacity-50 flex items-center justify-center gap-2"
+                className="w-full py-4 bg-blue-600 text-white rounded-xl font-black uppercase tracking-widest text-xs hover:bg-blue-700 transition-all disabled:opacity-50 flex items-center justify-center gap-2 shadow-lg shadow-blue-500/20"
               >
                 {isDeploying ? <Loader2 className="w-4 h-4 animate-spin" /> : <Megaphone className="w-4 h-4" />}
-                Blast Broadcast
+                Launch Campaign
               </button>
             </div>
           </div>
         </section>
 
+        {/* Global Analytics Overview (The "Charts at the top") */}
+        {!loading && history.length > 0 && (
+          <section className="grid grid-cols-1 md:grid-cols-3 gap-4 border-y border-gray-100 py-8">
+            <div className="p-4 bg-gray-50 rounded-2xl flex items-center gap-4">
+              <div className="w-10 h-10 rounded-full bg-blue-100 text-blue-600 flex items-center justify-center shrink-0">
+                <Target size={20} />
+              </div>
+              <div>
+                <p className="text-[10px] font-black uppercase tracking-widest text-gray-400">Total Reach</p>
+                <p className="text-2xl font-black text-gray-900">{globalStats.reach.toLocaleString()}</p>
+              </div>
+            </div>
+            <div className="p-4 bg-gray-50 rounded-2xl flex items-center gap-4">
+              <div className="w-10 h-10 rounded-full bg-indigo-100 text-indigo-600 flex items-center justify-center shrink-0">
+                <TrendingUp size={20} />
+              </div>
+              <div>
+                <p className="text-[10px] font-black uppercase tracking-widest text-gray-400">Total Clicks</p>
+                <p className="text-2xl font-black text-gray-900">{globalStats.clicks.toLocaleString()}</p>
+              </div>
+            </div>
+            <div className="p-4 bg-gray-50 rounded-2xl flex items-center gap-4">
+              <div className="w-10 h-10 rounded-full bg-teal-100 text-teal-600 flex items-center justify-center shrink-0">
+                <BarChart3 size={20} />
+              </div>
+              <div>
+                <p className="text-[10px] font-black uppercase tracking-widest text-gray-400">Total Responses</p>
+                <p className="text-2xl font-black text-gray-900">{globalStats.responses.toLocaleString()}</p>
+              </div>
+            </div>
+          </section>
+        )}
+
+        {/* History / Management Section */}
         <section>
-          <h4 className="font-bold text-gray-900 mb-4 flex items-center gap-2">
+          <h4 className="font-bold text-gray-900 mb-6 flex items-center gap-2">
             <Clock className="w-4 h-4 text-gray-500" />
-            Recent Broadcast Performance
+            Active & Recent Campaigns
           </h4>
           
           {loading ? (
              <div className="flex justify-center p-8"><Loader2 className="w-6 h-6 animate-spin text-gray-300" /></div>
+          ) : history.length === 0 ? (
+            <div className="text-center py-12 border-2 border-dashed border-gray-100 rounded-xl">
+              <p className="text-gray-400 text-sm">No campaign history found.</p>
+            </div>
           ) : (
             <div className="space-y-4">
               {history.map(item => (
-                <div key={item.id} className="bg-white border border-gray-100 rounded-xl p-4 shadow-sm">
-                  <div className="flex justify-between items-start mb-4">
-                    <div className="flex items-center gap-3">
-                      <div className={`p-2 rounded-lg ${item.type === 'poll' ? 'bg-teal-50 text-teal-600' : item.type === 'donation' ? 'bg-blue-50 text-blue-600' : 'bg-violet-50 text-violet-600'}`}>
-                        {item.type === 'poll' && <BarChart3 className="w-4 h-4" />}
-                        {item.type === 'donation' && <DollarSign className="w-4 h-4" />}
-                        {item.type === 'announcement' && <FileText className="w-4 h-4" />}
-                      </div>
-                      <div>
-                        <h5 className="font-bold text-gray-800 text-sm truncate max-w-50">{item.title}</h5>
-                        <p className="text-[10px] text-gray-400 font-bold uppercase">{new Date(item.created_at).toLocaleDateString()} • {item.target_audience}</p>
+                <div key={item.id} className="bg-white border border-gray-100 rounded-xl p-5 shadow-sm hover:border-blue-100 transition-all group relative overflow-hidden">
+                  
+                  {/* Delete Confirmation Overlay */}
+                  {deleteConfirmId === item.id && (
+                    <div className="absolute inset-0 z-20 bg-white/95 backdrop-blur-sm flex flex-col items-center justify-center text-center p-4 animate-in fade-in duration-200">
+                      <AlertTriangle className="text-red-500 w-8 h-8 mb-2" />
+                      <p className="text-sm font-bold text-gray-900">Delete campaign & analytics?</p>
+                      <p className="text-xs text-gray-500 mt-1 mb-4">This action cannot be undone.</p>
+                      <div className="flex gap-2">
+                        <button 
+                          onClick={() => deleteBroadcast(item.id)}
+                          className="px-4 py-2 bg-red-600 text-white text-xs font-bold rounded-lg hover:bg-red-700 transition-colors"
+                        >
+                          Confirm Delete
+                        </button>
+                        <button 
+                          onClick={() => setDeleteConfirmId(null)}
+                          className="px-4 py-2 bg-gray-100 text-gray-600 text-xs font-bold rounded-lg hover:bg-gray-200 transition-colors"
+                        >
+                          Cancel
+                        </button>
                       </div>
                     </div>
-                    <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold uppercase ${item.is_active ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-500'}`}>
-                      {item.is_active ? 'Active' : 'Expired'}
-                    </span>
+                  )}
+
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-5">
+                    <div className="flex items-center gap-3">
+                      <div className={`p-2.5 rounded-xl ${item.type === 'poll' ? 'bg-teal-50 text-teal-600' : item.type === 'donation' ? 'bg-blue-50 text-blue-600' : 'bg-violet-50 text-violet-600'}`}>
+                        {item.type === 'poll' && <BarChart3 className="w-5 h-5" />}
+                        {item.type === 'donation' && <DollarSign className="w-5 h-5" />}
+                        {item.type === 'announcement' && <FileText className="w-5 h-5" />}
+                      </div>
+                      <div className="min-w-0">
+                        <h5 className="font-bold text-gray-800 text-sm truncate max-w-50 sm:max-w-md">{item.title}</h5>
+                        <div className="flex items-center gap-2 mt-0.5">
+                           <span className={`px-1.5 py-0.5 rounded text-[9px] font-black uppercase tracking-tighter ${item.is_active ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-500'}`}>
+                            {item.is_active ? 'Active' : 'Stopped'}
+                          </span>
+                          <span className="text-[10px] text-gray-400 font-bold uppercase tracking-widest">{new Date(item.created_at).toLocaleDateString()} • {item.target_audience} audience</span>
+                        </div>
+                      </div>
+                    </div>
+                    
+                    <div className="flex items-center gap-2 self-end sm:self-auto">
+                      <button 
+                        disabled={processingId === item.id}
+                        onClick={() => toggleBroadcastStatus(item.id, item.is_active)}
+                        className={`p-2 rounded-lg border transition-all ${item.is_active ? 'bg-amber-50 text-amber-600 border-amber-100 hover:bg-amber-100' : 'bg-emerald-50 text-emerald-600 border-emerald-100 hover:bg-emerald-100'}`}
+                        title={item.is_active ? "Deactivate / Stop" : "Activate / Resume"}
+                      >
+                        {processingId === item.id ? <Loader2 className="w-4 h-4 animate-spin" /> : item.is_active ? <PowerOff className="w-4 h-4" /> : <Power className="w-4 h-4" />}
+                      </button>
+                      <button 
+                        disabled={processingId === item.id}
+                        onClick={() => setDeleteConfirmId(item.id)}
+                        className="p-2 bg-red-50 text-red-600 border border-red-100 rounded-lg hover:bg-red-100 transition-all"
+                        title="Delete Permanently"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    </div>
                   </div>
 
+                  {/* Quick Stats Grid */}
                   <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
-                    <div className="bg-gray-50 p-2 rounded-lg text-center">
-                      <p className="text-[10px] font-bold text-gray-400 uppercase">Imps</p>
-                      <p className="text-lg font-extrabold text-gray-800">{item.impressions}</p>
+                    <div className="bg-gray-50/50 p-3 rounded-xl text-center border border-gray-100/50">
+                      <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1">Reach</p>
+                      <p className="text-xl font-black text-gray-800">{item.impressions.toLocaleString()}</p>
                     </div>
                     {item.type === 'donation' ? (
-                      <div className="bg-blue-50 p-2 rounded-lg text-center col-span-3">
-                        <p className="text-[10px] font-bold text-blue-400 uppercase">Clicks</p>
-                        <p className="text-lg font-extrabold text-blue-600">{item.clicks}</p>
+                      <div className="bg-blue-50/30 p-3 rounded-xl text-center col-span-3 border border-blue-100/50 flex flex-col justify-center">
+                        <p className="text-[10px] font-bold text-blue-400 uppercase tracking-widest mb-1">Click-through Rate</p>
+                        <div className="flex items-center justify-center gap-2">
+                           <p className="text-xl font-black text-blue-600">{item.clicks.toLocaleString()} Clicks</p>
+                           <span className="text-[10px] font-bold text-blue-400">({((item.clicks / Math.max(item.impressions, 1)) * 100).toFixed(1)}%)</span>
+                        </div>
                       </div>
                     ) : item.type === 'poll' ? (
-                      <div className="bg-teal-50 p-2 rounded-lg text-center col-span-3">
-                        <div className="flex gap-1 h-2 bg-white rounded-full overflow-hidden mb-1.5 border border-teal-100">
-                          {item.responses.map((res, i) => (
-                            <div 
-                              key={i} 
-                              className="h-full bg-teal-500" 
-                              style={{ width: `${(res.count / Math.max(item.responses.reduce((a, b) => a + b.count, 0), 1)) * 100}%` }}
-                            />
-                          ))}
+                      <div className="bg-teal-50/30 p-3 rounded-xl col-span-3 border border-teal-100/50">
+                        <div className="flex gap-1 h-2.5 bg-white rounded-full overflow-hidden mb-2 border border-teal-100/50">
+                          {item.responses.length > 0 ? (
+                            item.responses.map((res, i) => (
+                              <div 
+                                key={i} 
+                                className={`h-full min-w-0.5 ${['bg-teal-500', 'bg-teal-400', 'bg-teal-300', 'bg-teal-200'][i % 4]}`}
+                                style={{ width: `${(res.count / Math.max(item.responses.reduce((a, b) => a + b.count, 0), 1)) * 100}%` }}
+                                title={`${res.label}: ${res.count}`}
+                              />
+                            ))
+                          ) : (
+                            <div className="w-full bg-gray-100 h-full" />
+                          )}
                         </div>
-                        <div className="flex justify-between px-1 text-[9px] text-gray-500 font-bold uppercase">
-                           <span>{item.responses.length > 0 ? item.responses[0].label : 'No data'}</span>
-                           <span>{item.responses.reduce((a, b) => a + b.count, 0)} Responses</span>
+                        <div className="flex justify-between items-center px-1">
+                           <div className="flex gap-2 overflow-hidden">
+                              {item.responses.length > 0 ? item.responses.slice(0, 2).map((r, i) => (
+                                <span key={i} className="text-[9px] text-teal-700 font-bold uppercase truncate max-w-20">
+                                  {r.label} ({Math.round((r.count / Math.max(item.responses.reduce((a, b) => a + b.count, 0), 1)) * 100)}%)
+                                </span>
+                              )) : (
+                                <span className="text-[9px] text-gray-400 italic">No responses yet</span>
+                              )}
+                           </div>
+                           <span className="text-[9px] text-gray-500 font-black uppercase tracking-tighter shrink-0 ml-4">
+                             {item.responses.reduce((a, b) => a + b.count, 0)} Total Votes
+                           </span>
                         </div>
                       </div>
                     ) : (
-                      <div className="bg-violet-50 p-2 rounded-lg text-center col-span-3 flex items-center justify-center">
-                        <span className="text-[10px] font-bold text-violet-400 uppercase">General Broadcast Engagement</span>
+                      <div className="bg-violet-50/30 p-3 rounded-xl text-center col-span-3 border border-violet-100/50 flex items-center justify-center">
+                        <span className="text-[10px] font-bold text-violet-400 uppercase tracking-widest">Informational Campaign Tracking Active</span>
                       </div>
                     )}
                   </div>
