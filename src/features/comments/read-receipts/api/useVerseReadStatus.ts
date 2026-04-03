@@ -1,5 +1,5 @@
 // Path: src/features/comments/read-receipts/api/useVerseReadStatus.ts
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { supabase } from '@/shared/api/supabase';
 
 type ReadStatus = 'unread' | 'read' | 'none';
@@ -14,10 +14,17 @@ export const useVerseReadStatus = (
   userId?: string | null
 ) => {
   const [status, setStatus] = useState<ReadStatus>('none');
+  const isMounted = useRef(true);
 
-  const fetchStatus = useCallback(async () => {
+  // Track mounting status to prevent state updates on unmounted components
+  useEffect(() => {
+    isMounted.current = true;
+    return () => { isMounted.current = false; };
+  }, []);
+
+  const fetchStatus = useCallback(async (retryCount = 0) => {
     if (!verseId || !userId) {
-      setStatus('none');
+      if (isMounted.current) setStatus('none');
       return;
     }
 
@@ -34,6 +41,7 @@ export const useVerseReadStatus = (
 
       const { data: receipt, error: receiptErr } = await receiptQuery.maybeSingle();
       if (receiptErr) throw receiptErr;
+      if (!isMounted.current) return;
 
       const lastReadDate = receipt ? new Date(receipt.last_read_at) : new Date(0);
 
@@ -47,7 +55,9 @@ export const useVerseReadStatus = (
       if (groupId) anyCommentsQuery = anyCommentsQuery.eq('group_id', groupId);
       else anyCommentsQuery = anyCommentsQuery.is('group_id', null);
 
-      const { data: anyComments } = await anyCommentsQuery;
+      const { data: anyComments, error: anyCommentsErr } = await anyCommentsQuery;
+      if (anyCommentsErr) throw anyCommentsErr;
+      if (!isMounted.current) return;
       
       // If no comments at all exist, hide the dot
       if (!anyComments || anyComments.length === 0) {
@@ -67,21 +77,43 @@ export const useVerseReadStatus = (
       if (groupId) unreadQuery = unreadQuery.eq('group_id', groupId);
       else unreadQuery = unreadQuery.is('group_id', null);
 
-      const { data: unreadComments } = await unreadQuery;
+      const { data: unreadComments, error: unreadErr } = await unreadQuery;
+      if (unreadErr) throw unreadErr;
+      if (!isMounted.current) return;
 
       if (unreadComments && unreadComments.length > 0) {
         setStatus('unread');
       } else {
         setStatus('read');
       }
-    } catch (err) {
+    } catch (err: unknown) {
+      const errorObj = err as { message?: string };
+      const errorMsg = err instanceof Error ? err.message : String(errorObj?.message || err);
+      
+      // Catch Supabase Auth GoTrue lock contention errors caused by massive concurrent fetching
+      if (errorMsg.includes('AbortError') || errorMsg.includes('Lock broken') || errorMsg.includes('fetch')) {
+        if (retryCount < 3 && isMounted.current) {
+          // Exponential backoff with jitter
+          const delay = Math.pow(2, retryCount) * 500 + Math.random() * 1000;
+          setTimeout(() => {
+            if (isMounted.current) fetchStatus(retryCount + 1);
+          }, delay);
+          return;
+        }
+      }
+      
       console.error('Failed to fetch verse read status:', err);
-      setStatus('none');
+      if (isMounted.current) setStatus('none');
     }
   }, [verseId, groupId, userId]);
 
   useEffect(() => {
-    fetchStatus();
+    // Initial tiny stagger to prevent all 30+ verses from hitting the auth lock at the exact same millisecond
+    const timer = setTimeout(() => {
+      if (isMounted.current) fetchStatus(0);
+    }, Math.random() * 400);
+    
+    return () => clearTimeout(timer);
   }, [fetchStatus]);
 
   // Realtime Listener
@@ -95,6 +127,8 @@ export const useVerseReadStatus = (
         table: 'comments',
         filter: `verse_id=eq.${verseId}`
       }, (payload) => {
+        if (!isMounted.current) return;
+        
         // Only trigger 'unread' if the new comment is from someone else
         if (payload.new.user_id !== userId) {
           setStatus('unread');
@@ -114,7 +148,9 @@ export const useVerseReadStatus = (
     if (!verseId || !userId) return;
     
     // Optimistic UI update to instantly turn the dot green/blue
-    setStatus(prev => prev === 'unread' ? 'read' : prev);
+    if (isMounted.current) {
+      setStatus(prev => prev === 'unread' ? 'read' : prev);
+    }
 
     try {
       let query = supabase

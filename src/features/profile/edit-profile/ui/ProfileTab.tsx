@@ -1,6 +1,6 @@
 // Path: src/features/profile/edit-profile/ui/ProfileTab.tsx
 import React, { useState, useEffect, useRef } from 'react';
-import { Loader2, AlertCircle, Check, User, Palette, AtSign } from 'lucide-react';
+import { Loader2, AlertCircle, Check, User, Palette, AtSign, BookOpen } from 'lucide-react';
 import { supabase } from '../../../../shared/api/supabase';
 import { PROFILE_COLORS, PROFILE_ICONS, HEBREW_ICONS, ALL_AVATAR_ICONS } from '../config/avatarOptions';
 
@@ -20,6 +20,7 @@ export const ProfileTab = ({ userId }: ProfileTabProps) => {
   const [legacyUrl, setLegacyUrl] = useState('');
   const [selectedColor, setSelectedColor] = useState('indigo');
   const [selectedIcon, setSelectedIcon] = useState('user');
+  const [extendedLibraryEnabled, setExtendedLibraryEnabled] = useState(false);
   
   const [isAvatarMenuOpen, setIsAvatarMenuOpen] = useState(false);
   const avatarMenuRef = useRef<HTMLDivElement>(null);
@@ -37,7 +38,7 @@ export const ProfileTab = ({ userId }: ProfileTabProps) => {
       try {
         const { data, error: fetchError } = await supabase
           .from('profiles')
-          .select('username, display_name, avatar_url')
+          .select('username, display_name, avatar_url, extended_library_enabled')
           .eq('id', userId)
           .single();
 
@@ -46,6 +47,8 @@ export const ProfileTab = ({ userId }: ProfileTabProps) => {
         if (data) {
           setUsername(data.username || '');
           setDisplayName(data.display_name || '');
+          setExtendedLibraryEnabled(data.extended_library_enabled || false);
+          
           if (data.avatar_url) {
             if (data.avatar_url.startsWith('http')) {
               setAvatarMode('url'); setLegacyUrl(data.avatar_url);
@@ -82,6 +85,7 @@ export const ProfileTab = ({ userId }: ProfileTabProps) => {
           username: username.toLowerCase() || null,
           display_name: displayName,
           avatar_url: finalAvatarUrl,
+          extended_library_enabled: extendedLibraryEnabled,
           updated_at: new Date().toISOString(),
         })
         .eq('id', userId);
@@ -198,6 +202,31 @@ export const ProfileTab = ({ userId }: ProfileTabProps) => {
             value={displayName} onChange={(e) => setDisplayName(e.target.value)}
             placeholder="e.g. Adam Cohn" className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-100 dark:border-slate-800 rounded-xl px-4 py-2.5 text-sm font-medium focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
           />
+        </div>
+      </div>
+
+      {/* Study Preferences Section */}
+      <div className="pt-2">
+        <div className="space-y-1.5 mb-2">
+          <label className="text-[10px] font-bold uppercase text-slate-400 tracking-widest flex items-center gap-1">
+            <BookOpen size={10} /> Study Preferences
+          </label>
+        </div>
+        <div className="flex items-center justify-between p-4 bg-slate-50 dark:bg-slate-800 border border-slate-100 dark:border-slate-800 rounded-xl">
+          <div className="pr-4">
+            <h4 className="text-sm font-bold text-slate-900 dark:text-white">Extended Library</h4>
+            <p className="text-xs text-slate-500 mt-0.5">Enable access to the Brit Chadashah (Gospels, Epistles, Revelation) across the platform.</p>
+          </div>
+          <label className="relative inline-flex items-center cursor-pointer shrink-0" title="Toggle Extended Library">
+            <input 
+              type="checkbox" 
+              className="sr-only peer" 
+              checked={extendedLibraryEnabled}
+              onChange={(e) => setExtendedLibraryEnabled(e.target.checked)}
+              aria-label="Toggle Extended Library"
+            />
+            <div className="w-11 h-6 bg-slate-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-indigo-500/20 rounded-full peer dark:bg-slate-900 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all dark:border-slate-600 peer-checked:bg-indigo-600"></div>
+          </label>
         </div>
       </div>
 
