@@ -56,7 +56,7 @@ interface VerseCardProps {
   onClick?: () => void;
   onWordClick?: (strongs: string) => void;
   groupId?: string | null; 
-  userId?: string | null;  
+  userId?: string | null;   
 }
 
 export const VerseCard = ({ 
@@ -90,7 +90,6 @@ export const VerseCard = ({
   const verseNumber = verse.verse_num || verse.verse_number || 0;
 
   // Boost Z-index when hovered or active so lexicon tooltips appear OVER adjacent cards.
-  // We removed overflow-hidden to prevent clipping.
   const stateClasses = active 
     ? "bg-indigo-50/50 dark:bg-indigo-900/20 border-indigo-200 z-20" 
     : isHovered 
@@ -104,6 +103,10 @@ export const VerseCard = ({
     }
     if (onClick) onClick();
   };
+
+  // Determine vertical offset for top-aligned items (Card padding is p-6 = 24px)
+  const isHebrewVisible = (languageMode === 'both' || languageMode === 'he');
+  const firstLineHeight = isHebrewVisible ? 'h-[1.8em]' : 'h-[1.625em]';
 
   return (
     <div
@@ -122,23 +125,31 @@ export const VerseCard = ({
         </div>
       )}
 
-      {/* RIGHT SIDE: Read Status Indicator - Vertically Centered & Muted */}
+      {/* TOP RIGHT: Read Status Indicator - Centered with first line of text. top-7 provides a slight nudge down from the padding edge. */}
       {currentStatus === 'read' && (
         <div 
-          className="absolute right-3 top-1/2 -translate-y-1/2 w-1.5 h-1.5 rounded-full bg-blue-400 dark:bg-blue-500/40 opacity-60 transition-all duration-300 z-10"
-          title="Commentary read"
-        />
+          className={`absolute right-3 top-7 ${firstLineHeight} flex items-center transition-all duration-300 z-10`}
+        >
+          <div 
+            className="w-1.5 h-1.5 rounded-full bg-blue-400 dark:bg-blue-500/40 opacity-60"
+            title="Commentary read"
+          />
+        </div>
       )}
 
       {/* Main Content with Horizontal Padding to prevent icon overlap */}
       <div className="flex flex-col gap-6 px-4">
         
         {/* Hebrew Block */}
-        {(languageMode === 'both' || languageMode === 'he') && (
+        {isHebrewVisible && (
           <div className="flex gap-6 items-start" dir="rtl">
-            <span className={`text-lg font-serif font-bold pt-1 shrink-0 min-w-8 text-right transition-colors ${active || isHovered ? 'text-indigo-500' : 'text-slate-300 dark:text-slate-700'}`}>
-              {toHebrewNumeral(verseNumber)}
-            </span>
+            {/* Number Container: Forced height to match text line-height for perfect vertical centering */}
+            <div className="shrink-0 min-w-8 flex items-center justify-end h-[1.8em] text-3xl">
+              <span className={`text-lg font-serif font-bold transition-colors ${active || isHovered ? 'text-indigo-500' : 'text-slate-300 dark:text-slate-700'}`}>
+                {toHebrewNumeral(verseNumber)}
+              </span>
+            </div>
+            
             <div className="flex-1">
               {verse.words && verse.words.length > 0 ? (
                 <HebrewVerseRenderer 
@@ -157,9 +168,13 @@ export const VerseCard = ({
         {/* English Block */}
         {(languageMode === 'both' || languageMode === 'en') && (
           <div className="flex gap-6 items-start" dir="ltr">
-            <span className={`text-sm font-sans tabular-nums font-medium pt-1.5 shrink-0 min-w-8 text-left transition-colors ${active || isHovered ? 'text-indigo-500' : 'text-slate-400 dark:text-slate-500'}`}>
-              {verseNumber}
-            </span>
+            {/* Number Container: Matches 'leading-relaxed' (approx 1.625em) and 'text-lg' of the paragraph */}
+            <div className="shrink-0 min-w-8 flex items-center justify-start h-[1.625em] text-lg">
+              <span className={`text-sm font-sans tabular-nums font-medium transition-colors ${active || isHovered ? 'text-indigo-500' : 'text-slate-400 dark:text-slate-500'}`}>
+                {verseNumber}
+              </span>
+            </div>
+            
             <p className="text-lg leading-relaxed text-slate-700 dark:text-slate-300 flex-1">
               {displayEnglish || <span className="text-slate-300 italic">Translation missing</span>}
             </p>
