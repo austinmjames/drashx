@@ -38,7 +38,7 @@ export const UserBadge = ({ score }: UserBadgeProps) => {
 
   return (
     <div 
-      className={`flex items-center gap-1 px-1.5 py-0.5 rounded-md font-bold text-[9px] uppercase tracking-widest cursor-help transition-all hover:scale-105 shadow-sm ${colorClass}`}
+      className={`flex items-center gap-1 px-1.5 py-0.5 rounded-md font-bold text-[9px] uppercase tracking-widest shadow-sm ${colorClass}`}
       title={`${rankName} • Scholarly Score: ${score}`}
     >
       <RankIcon size={10} strokeWidth={2.5} />
