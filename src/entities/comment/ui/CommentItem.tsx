@@ -141,15 +141,85 @@ export const CommentItem = ({
   const showNewBadge = isNew && !isOptimisticallyRead;
   const showNewRepliesBadge = hasNewReplies && !isOptimisticallyRead;
 
-  // --- Truncation Logic ---
-  const MAX_CHARS = 250;
-  const strippedContent = useMemo(() => comment.content.replace(/<[^>]*>?/gm, ''), [comment.content]);
-  const needsTruncation = strippedContent.length > MAX_CHARS;
+  // --- Safe HTML Character Truncation Logic ---
+  const MAX_CHARS_THRESHOLD = 499;
+  const TRUNCATED_LENGTH = 325;
   
+  const strippedContent = useMemo(() => comment.content.replace(/<[^>]*>?/gm, ''), [comment.content]);
+  const needsTruncation = strippedContent.length > MAX_CHARS_THRESHOLD;
+
   const contentToRender = useMemo(() => {
     if (!needsTruncation || isTextExpanded) return comment.content;
-    return strippedContent.slice(0, MAX_CHARS).trim() + '...';
-  }, [comment.content, strippedContent, isTextExpanded, needsTruncation]);
+
+    const truncateHtmlSafe = (html: string, limit: number) => {
+      let currentLength = 0;
+      let result = '';
+      let i = 0;
+      const openTags: string[] = [];
+
+      while (i < html.length) {
+        if (currentLength >= limit) {
+          result += '...';
+          break;
+        }
+
+        if (html[i] === '<') {
+          let tag = '';
+          const isClosing = html[i + 1] === '/';
+          
+          while (i < html.length && html[i] !== '>') {
+            tag += html[i];
+            i++;
+          }
+          if (i < html.length) {
+            tag += html[i];
+          }
+          result += tag;
+
+          const tagMatch = tag.match(/<\/?([a-zA-Z0-9]+)/);
+          if (tagMatch) {
+            const tagName = tagMatch[1].toLowerCase();
+            if (!isClosing && !['br', 'hr', 'img', 'input'].includes(tagName)) {
+              openTags.push(tagName);
+            } else if (isClosing) {
+              if (openTags.length > 0 && openTags[openTags.length - 1] === tagName) {
+                openTags.pop();
+              }
+            }
+          }
+        } else if (html[i] === '&') {
+          let entity = '';
+          let j = i;
+          while (j < html.length && html[j] !== ';' && (j - i) < 10) {
+            entity += html[j];
+            j++;
+          }
+          if (html[j] === ';') {
+            entity += ';';
+            result += entity;
+            currentLength += 1;
+            i = j;
+          } else {
+            result += html[i];
+            currentLength += 1;
+          }
+        } else {
+          result += html[i];
+          currentLength++;
+        }
+        i++;
+      }
+
+      while (openTags.length > 0) {
+        const tag = openTags.pop();
+        result += `</${tag}>`;
+      }
+
+      return result;
+    };
+
+    return truncateHtmlSafe(comment.content, TRUNCATED_LENGTH);
+  }, [comment.content, isTextExpanded, needsTruncation]);
 
   const relativeTimestamp = useMemo(() => {
     const now = new Date();
@@ -179,6 +249,10 @@ export const CommentItem = ({
   const resolvedClasses = "bg-blue-800 dark:bg-blue-900 text-white shadow-md p-3 rounded-2xl";
   const nestedClasses = "bg-white dark:bg-slate-900/60 border border-slate-100 dark:border-slate-800 shadow-sm p-3 rounded-2xl";
   const rootClasses = `py-3 px-3 -mx-1 rounded-2xl transition-colors duration-200 ${isContainerHovered ? 'bg-slate-50 dark:bg-slate-900/40' : ''}`;
+
+  // Forced Cache Invalidation Comment: Turbopack CSS Error Reset
+  const baseSmartTextClasses = "[&_b]:font-bold [&_i]:italic [&_u]:underline [&_.hebrew-scale]:text-[1.4em]";
+  const currentSmartTextClasses = isResolved ? `${baseSmartTextClasses} text-white` : baseSmartTextClasses;
 
   return (
     <div 
@@ -268,17 +342,21 @@ export const CommentItem = ({
           </h4>
         )}
         <div className={`text-sm leading-relaxed pr-2 ${isResolved ? 'text-white' : 'text-slate-700 dark:text-slate-300'}`}>
-          <SmartText 
-            text={contentToRender} 
-            isHtml={!needsTruncation || isTextExpanded} 
-            onReferenceClick={(b,c,v) => router.push(getVersePath(b,c,v))} 
-            className="[&_b]:font-bold [&_i]:italic [&_u]:underline [&_.hebrew-scale]:text-[1.4em]" 
-          />
+          <div className={!isTextExpanded && needsTruncation ? "line-clamp-4" : ""}>
+            <SmartText 
+              text={contentToRender} 
+              isHtml={true} 
+              onReferenceClick={(b,c,v) => router.push(getVersePath(b,c,v))} 
+              className={currentSmartTextClasses}
+              referenceVariant={isResolved ? "resolved" : "subtle"}
+              hideReferenceIcon={true}
+            />
+          </div>
         </div>
         {needsTruncation && (
           <button 
             onClick={(e) => { e.stopPropagation(); setIsTextExpanded(!isTextExpanded); }} 
-            className={`text-[10px] font-black uppercase tracking-widest mt-1 flex items-center gap-1 ${isResolved ? 'text-blue-200 hover:text-white' : 'text-indigo-500 hover:text-indigo-600'}`}
+            className={`text-[10px] font-medium uppercase tracking-widest mt-1 flex items-center gap-1 ${isResolved ? 'text-blue-300 hover:text-white' : 'text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200'}`}
           >
             {isTextExpanded ? <><ChevronUp size={16}/> View Less</> : <><ChevronDown size={16}/> View More</>}
           </button>

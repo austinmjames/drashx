@@ -13,6 +13,8 @@ interface ReferenceLinkProps {
   className?: string;
   onClick: (book: string, chapter: number, verse: number) => void;
   hidePreview?: boolean;
+  variant?: 'default' | 'subtle' | 'resolved'; // Added for context styling
+  hideIcon?: boolean; // Added to remove the external link icon when requested
 }
 
 export const ReferenceLink = ({ 
@@ -22,7 +24,9 @@ export const ReferenceLink = ({
   label,
   className = "", 
   onClick,
-  hidePreview = false 
+  hidePreview = false,
+  variant = 'default',
+  hideIcon = false
 }: ReferenceLinkProps) => {
   const [preview, setPreview] = useState<{ he: string; en: string } | null>(null);
   const [loading, setLoading] = useState(false);
@@ -112,6 +116,13 @@ export const ReferenceLink = ({
   const positionClasses = tooltipStyle.placement === 'top' ? "bottom-full mb-3" : "top-full mt-3";
   const arrowPlacementClasses = tooltipStyle.placement === 'top' ? "-bottom-1.5 border-r border-b" : "-top-1.5 border-l border-t";
 
+  // --- Dynamic Color Variants ---
+  const baseColorClasses = variant === 'subtle'
+    ? "bg-slate-100 dark:bg-slate-800/50 text-slate-500 dark:text-slate-400 border-slate-200 dark:border-slate-700/50 hover:bg-slate-200 hover:dark:bg-slate-800 hover:text-slate-700 hover:dark:text-slate-300"
+    : variant === 'resolved'
+    ? "bg-white/10 text-blue-100 border-white/20 hover:bg-white/20 hover:text-white"
+    : "bg-indigo-50 dark:bg-indigo-900/30 text-indigo-600 dark:text-indigo-400 border-indigo-100 dark:border-indigo-800/50 hover:bg-indigo-600 hover:text-white";
+
   return (
     <div className="relative group/ref-container inline-block">
       <button 
@@ -120,11 +131,11 @@ export const ReferenceLink = ({
           onClick(book, chapter, verse);
         }}
         onMouseEnter={handleMouseEnter}
-        className={`flex items-center gap-1.5 px-2 py-0.5 bg-indigo-50 dark:bg-indigo-900/30 text-[10px] font-black text-indigo-600 dark:text-indigo-400 rounded-md border border-indigo-100 dark:border-indigo-800/50 shadow-sm hover:bg-indigo-600 hover:text-white transition-all group/badge active:scale-95 ${className}`}
+        className={`flex items-center gap-1.5 px-2 py-0.5 text-[10px] font-black rounded-md border shadow-sm transition-all group/badge active:scale-95 ${baseColorClasses} ${className}`}
         title={`Jump to ${displayLabel}`}
       >
         {displayLabel}
-        <ExternalLink size={10} className="opacity-0 group-hover/badge:opacity-100 transition-opacity" />
+        {!hideIcon && <ExternalLink size={10} className="opacity-0 group-hover/badge:opacity-100 transition-opacity" />}
       </button>
 
       {!hidePreview && (
