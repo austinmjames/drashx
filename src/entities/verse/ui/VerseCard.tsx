@@ -89,11 +89,12 @@ export const VerseCard = ({
 
   const verseNumber = verse.verse_num || verse.verse_number || 0;
 
-  // Boost Z-index when hovered or active so lexicon tooltips appear OVER adjacent cards.
+  // Boost Z-index minimally when hovered or active so lexicon tooltips appear OVER adjacent cards,
+  // but remain UNDER sticky site-wide elements like headers (which typically use z-10 or higher).
   const stateClasses = active 
-    ? "bg-indigo-50/50 dark:bg-indigo-900/20 border-indigo-200 z-20" 
+    ? "bg-indigo-50/50 dark:bg-indigo-900/20 border-indigo-200 z-[1]" 
     : isHovered 
-      ? "bg-slate-50 dark:bg-slate-800/50 border-slate-200 dark:border-slate-800 z-30" 
+      ? "bg-slate-50 dark:bg-slate-800/50 border-slate-200 dark:border-slate-800 z-[2]" 
       : "bg-transparent border-slate-200 dark:border-slate-800 z-0";
 
   const handleCardClick = () => {
