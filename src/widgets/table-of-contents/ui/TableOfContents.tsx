@@ -1,7 +1,7 @@
 // Path: src/widgets/table-of-contents/ui/TableOfContents.tsx
 "use client";
 
-import React, { useEffect, useState, useMemo, useCallback } from 'react';
+import React, { useEffect, useState, useMemo, useCallback, useRef } from 'react';
 import { useParams } from 'next/navigation';
 import { supabase } from '../../../shared/api/supabase';
 import { Book } from 'lucide-react';
@@ -51,10 +51,9 @@ export const TableOfContents = ({ userId, groupId }: TableOfContentsProps) => {
   const [activeCategory, setActiveCategory] = useState<string | null>(null);
   const [activeBook, setActiveBook] = useState<BookType | null>(null);
   
-  // Track the last book we auto-synced to. This prevents the menu from 
-  // snapping back to the current chapter grid while the user is trying to 
-  // browse other collections or categories.
-  const [lastSyncedBook, setLastSyncedBook] = useState<string | null>(null);
+  // Ref to track synchronization and prevent "snapping back" during manual navigation
+  const lastSyncedBookRef = useRef<string | null>(null);
+  const hasInitializedPrefs = useRef(false);
 
   const [extendedLibraryEnabled, setExtendedLibraryEnabled] = useState(false);
   const [enabledCollections, setEnabledCollections] = useState<string[]>(['Tanakh']);
@@ -97,21 +96,20 @@ export const TableOfContents = ({ userId, groupId }: TableOfContentsProps) => {
         }
       }
 
-      // Handle direct URL navigation and Initial Sync
-      // Only force the 'chapters' view if we haven't already synced to this book.
-      if (dataToSync && currentBookName && lastSyncedBook !== currentBookName) {
+      // SYNC LOGIC: Only force navigate to current chapter if we haven't synced this book yet
+      if (dataToSync && currentBookName && lastSyncedBookRef.current !== currentBookName) {
         const foundBook = dataToSync.find(b => b.name_en.toLowerCase() === currentBookName.toLowerCase());
         if (foundBook) {
           setActiveBook(foundBook);
           setActiveCategory(foundBook.category);
           setActiveCollection(foundBook.collection || 'Tanakh');
-          setLastSyncedBook(currentBookName);
+          lastSyncedBookRef.current = currentBookName;
           setViewMode('chapters');
         }
       }
     };
     fetchAndSync();
-  }, [currentBookName, lastSyncedBook]);
+  }, [currentBookName]);
 
   // --- Fetch User Preferences ---
   const fetchPrefs = useCallback(async (retryCount = 0) => {
@@ -136,16 +134,17 @@ export const TableOfContents = ({ userId, groupId }: TableOfContentsProps) => {
         : ['Tanakh'];
 
       setExtendedLibraryEnabled(isEnabled);
+      setEnabledCollections(collections);
       
-      if (!isEnabled) {
-        setEnabledCollections(['Tanakh']);
-        if (viewMode === 'collections') setViewMode('categories');
-      } else {
-        setEnabledCollections(collections);
-        // Only jump to collections if we aren't currently viewing a book
-        if (collections.length > 1 && !currentBookName && viewMode === 'categories') {
+      // Only handle INITIAL view mode setup based on preferences.
+      // Once the component is running, we let the user manage viewMode manually.
+      if (!hasInitializedPrefs.current) {
+        if (!isEnabled) {
+          setViewMode('categories');
+        } else if (collections.length > 1 && !currentBookName) {
           setViewMode('collections');
         }
+        hasInitializedPrefs.current = true;
       }
     } catch (err: unknown) {
       const errorMsg = err instanceof Error ? err.message : JSON.stringify(err);
@@ -156,7 +155,7 @@ export const TableOfContents = ({ userId, groupId }: TableOfContentsProps) => {
       }
       console.error("Error fetching ToC preferences:", err);
     }
-  }, [userId, currentBookName, viewMode]);
+  }, [userId, currentBookName]); // REMOVED viewMode from dependencies to stop the reset loop
 
   useEffect(() => {
     fetchPrefs();

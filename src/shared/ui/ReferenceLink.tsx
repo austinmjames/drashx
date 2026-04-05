@@ -1,9 +1,9 @@
 // Path: src/shared/ui/ReferenceLink.tsx
 "use client";
 
-import React, { useState, useCallback, useRef, useMemo } from 'react';
+import React, { useState, useCallback, useRef, useMemo, useEffect } from 'react';
 import { createPortal } from 'react-dom';
-import { BookOpen, Loader2, Lock, Sparkles, ExternalLink } from 'lucide-react';
+import { BookOpen, Loader2, Lock, Sparkles, ExternalLink, ArrowRight } from 'lucide-react';
 import { supabase } from '@/shared/api/supabase';
 
 interface ReferenceLinkProps {
@@ -32,7 +32,9 @@ export const ReferenceLink = ({
   const [preview, setPreview] = useState<{ he: string; en: string } | null>(null);
   const [loading, setLoading] = useState(false);
   const [enabling, setEnabling] = useState(false);
-  const [isHovered, setIsHovered] = useState(false);
+  const [isOpen, setIsOpen] = useState(false);
+  const [mounted, setMounted] = useState(false);
+  const [isTouch, setIsTouch] = useState(false);
   
   const [isRestricted, setIsRestricted] = useState<boolean | null>(null);
   const [targetCollection, setTargetCollection] = useState<string>('Tanakh');
@@ -47,12 +49,37 @@ export const ReferenceLink = ({
   });
 
   const buttonRef = useRef<HTMLButtonElement>(null);
+  const tooltipRef = useRef<HTMLDivElement>(null);
+  
   const displayLabel = label || `${book} ${chapter}:${verse}`;
   const isRange = displayLabel.includes('-') || displayLabel.includes(',');
 
-  /**
-   * Enhanced checkAccess to return collection info for the preview fetcher.
-   */
+  useEffect(() => {
+    setMounted(true);
+    // Safely detect touch capabilities on mount
+    if (typeof window !== 'undefined') {
+      setIsTouch('ontouchstart' in window || navigator.maxTouchPoints > 0);
+    }
+    return () => setMounted(false);
+  }, []);
+
+  // Close tooltip when clicking outside
+  useEffect(() => {
+    if (!isOpen) return;
+    const handleClickOutside = (e: MouseEvent | TouchEvent) => {
+      if (tooltipRef.current && !tooltipRef.current.contains(e.target as Node) && 
+          buttonRef.current && !buttonRef.current.contains(e.target as Node)) {
+        setIsOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    document.addEventListener('touchstart', handleClickOutside);
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+      document.removeEventListener('touchstart', handleClickOutside);
+    };
+  }, [isOpen]);
+
   const checkAccess = useCallback(async (retryCount = 0): Promise<{ restricted: boolean; collection: string }> => {
     try {
       const { data: bookMeta } = await supabase
@@ -69,9 +96,7 @@ export const ReferenceLink = ({
         return { restricted: false, collection };
       }
 
-      const { data: { user }, error: authError } = await supabase.auth.getUser();
-      if (authError) throw authError;
-
+      const { data: { user } } = await supabase.auth.getUser();
       if (!user) {
         setIsRestricted(true);
         return { restricted: true, collection };
@@ -101,17 +126,12 @@ export const ReferenceLink = ({
     if (hidePreview || preview || loading) return;
     setLoading(true);
     
-    // 1. Check access and get the collection context
     const { restricted, collection } = await checkAccess();
     if (restricted) { setLoading(false); return; }
 
-    // 2. Map collection to the primary translation slug for the preview
-    // Tanakh defaults to JPS, Christianity defaults to WEB
     const slug = collection === 'Christianity' ? 'WEB' : 'JPS';
 
     try {
-      // FIX: Added .eq('translation_slug', slug) to ensure the view returns exactly one row.
-      // Without this filter, the new multi-translation architecture returns 0 rows or errors.
       const { data, error } = await supabase
         .from('reader_verses_view')
         .select('text_he, text_en')
@@ -124,7 +144,6 @@ export const ReferenceLink = ({
       if (data && !error) {
         setPreview({ he: data.text_he, en: data.text_en || '' });
       } else {
-        // Final fallback: try without a slug if the join failed (for newly added verses not yet in translation table)
         const { data: fallback } = await supabase
           .from('reader_verses_view')
           .select('text_he, text_en')
@@ -143,31 +162,9 @@ export const ReferenceLink = ({
     }
   }, [book, chapter, verse, hidePreview, preview, loading, checkAccess]);
 
-  const handleEnableCollection = async (e: React.MouseEvent) => {
-    e.stopPropagation();
-    setEnabling(true);
-    try {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) throw new Error("Must be logged in");
-      const { data: profile } = await supabase.from('profiles').select('enabled_collections').eq('id', user.id).single();
-      const currentCols = profile?.enabled_collections || ['Tanakh'];
-      const updatedCols = Array.from(new Set([...currentCols, targetCollection]));
-      await supabase.from('profiles').update({ extended_library_enabled: true, enabled_collections: updatedCols, updated_at: new Date().toISOString() }).eq('id', user.id);
-      setIsRestricted(false);
-      setTimeout(fetchPreview, 50);
-    } catch (err) {
-      console.error("Failed to enable collection:", err);
-    } finally {
-      setEnabling(false);
-    }
-  };
-
-  const handleMouseEnter = (e: React.MouseEvent<HTMLElement>) => {
-    if (hidePreview) return;
-    fetchPreview();
-    setIsHovered(true);
-
-    const rect = e.currentTarget.getBoundingClientRect();
+  const updatePosition = () => {
+    if (!buttonRef.current) return;
+    const rect = buttonRef.current.getBoundingClientRect();
     const viewportHeight = window.innerHeight;
     const viewportWidth = window.innerWidth;
     const tooltipWidth = 320; 
@@ -198,15 +195,68 @@ export const ReferenceLink = ({
     });
   };
 
-  const handleMouseLeave = () => {
-    setIsHovered(false);
-    setTooltipStyle(prev => ({ ...prev, opacity: 0, scale: 0.95 }));
+  // --- CORE BACKSTACK LOGIC ---
+  const executeNavigation = () => {
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('reader-log-history'));
+    }
+    setIsOpen(false);
+    onClick(book, chapter, verse);
   };
 
-  const handleLinkClick = (e: React.MouseEvent) => {
+  const handleTouchStart = () => {
+    if (!isTouch) setIsTouch(true);
+  };
+
+  const handleInteraction = (e: React.MouseEvent | React.TouchEvent) => {
     e.stopPropagation();
-    if (isRestricted) return;
-    onClick(book, chapter, verse);
+    e.preventDefault(); // Strongly prevents native link routing if wrapped in HTML <a> tags
+    
+    if (isTouch) {
+      if (!isOpen) {
+        // First tap: Open the preview/restricted tooltip
+        updatePosition();
+        setIsOpen(true);
+        fetchPreview();
+      } else {
+        // Second tap on the same link closes it
+        setIsOpen(false);
+      }
+    } else {
+      // Desktop: Direct jump if not restricted
+      if (!isRestricted) executeNavigation();
+    }
+  };
+
+  const handleMouseEnter = () => {
+    if (isTouch || hidePreview) return;
+    updatePosition();
+    setIsOpen(true);
+    fetchPreview();
+  };
+
+  const handleMouseLeave = () => {
+    if (isTouch) return;
+    setIsOpen(false);
+  };
+
+  const handleEnableCollection = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    setEnabling(true);
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) return;
+      const { data: profile } = await supabase.from('profiles').select('enabled_collections').eq('id', user.id).single();
+      const currentCols = profile?.enabled_collections || ['Tanakh'];
+      const updatedCols = Array.from(new Set([...currentCols, targetCollection]));
+      await supabase.from('profiles').update({ extended_library_enabled: true, enabled_collections: updatedCols, updated_at: new Date().toISOString() }).eq('id', user.id);
+      setIsRestricted(false);
+      setTimeout(fetchPreview, 50);
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setEnabling(false);
+    }
   };
 
   const isGreek = useMemo(() => {
@@ -230,11 +280,12 @@ export const ReferenceLink = ({
     <>
       <button 
         ref={buttonRef}
-        onClick={handleLinkClick}
+        onClick={handleInteraction}
+        onTouchStart={handleTouchStart}
         onMouseEnter={handleMouseEnter}
         onMouseLeave={handleMouseLeave}
         className={`inline-flex items-center gap-1.5 px-2 py-0.5 text-[10px] font-black rounded-md border shadow-sm transition-all group/badge active:scale-95 ${baseColorClasses} ${className}`}
-        title={isRestricted ? `${targetCollection} Restricted` : `Jump to ${displayLabel}`}
+        title={isRestricted ? `${targetCollection} Restricted` : `View ${displayLabel}`}
       >
         {isRestricted && <Lock size={10} className="text-slate-400" />}
         {displayLabel}
@@ -243,8 +294,9 @@ export const ReferenceLink = ({
         )}
       </button>
 
-      {typeof document !== 'undefined' && createPortal(
+      {mounted && isOpen && createPortal(
         <div 
+          ref={tooltipRef}
           className="fixed z-9999 pointer-events-none duration-200 ease-out"
           style={{ 
             top: tooltipStyle.top, 
@@ -253,55 +305,77 @@ export const ReferenceLink = ({
             transform: `${tooltipStyle.placement === 'top' ? 'translateY(-100%) ' : ''}scale(${tooltipStyle.scale})`,
             transformOrigin: tooltipStyle.placement === 'top' ? 'bottom center' : 'top center',
             transitionProperty: 'opacity, transform',
-            visibility: isHovered ? 'visible' : 'hidden'
+            visibility: isOpen ? 'visible' : 'hidden'
           }}
         >
-          <div className="relative bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 p-5 w-[320px] flex flex-col gap-3 text-left pointer-events-auto shadow-[0_20px_50px_rgba(0,0,0,0.15)] dark:shadow-[0_20px_50px_rgba(0,0,0,0.4)]">
+          <div className="relative bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 w-[320px] flex flex-col overflow-hidden pointer-events-auto shadow-[0_20px_50px_rgba(0,0,0,0.15)] dark:shadow-[0_20px_50px_rgba(0,0,0,0.4)]">
             
-            {isRestricted ? (
-                <div className="py-2 text-center space-y-4">
-                  <div className="w-12 h-12 bg-amber-50 dark:bg-amber-900/20 text-amber-600 dark:text-amber-400 rounded-2xl flex items-center justify-center mx-auto shadow-sm rotate-3">
-                    <Lock size={24} />
+            {/* Header with Nav Logic */}
+            <div className="px-4 py-2.5 bg-slate-50 dark:bg-slate-950 border-b border-slate-100 dark:border-slate-800 flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <BookOpen size={14} className="text-indigo-500 shrink-0" />
+                <span className="text-[10px] font-black uppercase tracking-widest text-slate-500 truncate">{displayLabel}</span>
+              </div>
+              
+              {!isRestricted && isTouch && (
+                <button 
+                  onClick={executeNavigation}
+                  className="flex items-center gap-1.5 px-2 py-1 bg-indigo-600 text-white rounded-lg text-[9px] font-black uppercase tracking-widest hover:bg-indigo-700 transition-all shadow-md shadow-indigo-600/20 active:scale-95"
+                >
+                  Go to Verse <ArrowRight size={10} strokeWidth={3} />
+                </button>
+              )}
+            </div>
+
+            <div className="p-5 flex flex-col gap-3 text-left">
+              {isRestricted ? (
+                  <div className="py-2 text-center space-y-4">
+                    <div className="w-12 h-12 bg-amber-50 dark:bg-amber-900/20 text-amber-600 dark:text-amber-400 rounded-2xl flex items-center justify-center mx-auto shadow-sm rotate-3">
+                      <Lock size={24} />
+                    </div>
+                    <div>
+                      <h4 className="text-sm font-bold text-slate-900 dark:text-white">Library Access Restricted</h4>
+                      <p className="text-xs text-slate-500 dark:text-slate-400 mt-1 leading-relaxed px-2">
+                        The <span className="font-bold text-indigo-600 dark:text-indigo-400">{targetCollection}</span> collection has not yet been enabled.
+                      </p>
+                    </div>
+                    <button onClick={handleEnableCollection} disabled={enabling} className="w-full py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-[10px] font-black uppercase tracking-widest transition-all flex items-center justify-center gap-2 shadow-lg shadow-indigo-600/20 disabled:opacity-50 active:scale-95">
+                      {enabling ? <Loader2 size={14} className="animate-spin" /> : <Sparkles size={14} />}
+                      Enable {targetCollection}
+                    </button>
+                    <p className="text-[9px] font-bold text-slate-400 uppercase tracking-tighter italic">Manage in Settings &gt; Library</p>
                   </div>
-                  <div>
-                    <h4 className="text-sm font-bold text-slate-900 dark:text-white">Library Access Restricted</h4>
-                    <p className="text-xs text-slate-500 dark:text-slate-400 mt-1 leading-relaxed px-2">
-                      The <span className="font-bold text-indigo-600 dark:text-indigo-400">{targetCollection}</span> collection has not yet been enabled.
-                    </p>
-                  </div>
-                  <button onClick={handleEnableCollection} disabled={enabling} className="w-full py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-[10px] font-black uppercase tracking-widest transition-all flex items-center justify-center gap-2 shadow-lg shadow-indigo-600/20 disabled:opacity-50 active:scale-95">
-                    {enabling ? <Loader2 size={14} className="animate-spin" /> : <Sparkles size={14} />}
-                    Enable {targetCollection}
-                  </button>
-                  <p className="text-[9px] font-bold text-slate-400 uppercase tracking-tighter">Manage in Account Settings &gt; Library</p>
-                </div>
-            ) : (
-              <>
-                <div className="flex items-center gap-2 border-b border-slate-100 dark:border-slate-800 pb-2">
-                  <BookOpen size={14} className="text-indigo-500 shrink-0" />
-                  <span className="text-[10px] font-black uppercase tracking-widest text-slate-500 truncate">{displayLabel}</span>
-                </div>
-                {loading ? (
-                  <div className="flex items-center gap-2 py-6 text-slate-400">
-                    <Loader2 size={16} className="animate-spin" />
-                    <span className="text-[10px] font-black uppercase tracking-widest">Consulting Scrolls...</span>
-                  </div>
-                ) : preview ? (
-                  <div className="space-y-4">
-                    <p 
-                      className={`font-serif text-slate-900 dark:text-slate-100 leading-relaxed ${isGreek ? 'text-sm text-left' : 'text-xl text-right'}`} 
-                      dir={isGreek ? "ltr" : "rtl"}
-                    >
-                      {preview.he}{isRange && " ..."}
-                    </p>
-                    <p className="text-sm text-slate-600 dark:text-slate-400 leading-relaxed italic border-l-2 border-slate-100 dark:border-slate-800 pl-3">
-                      {preview.en}{isRange && " ..."}
-                    </p>
-                  </div>
-                ) : (
-                  <p className="text-xs text-slate-400 italic py-4">Preview unavailable.</p>
-                )}
-              </>
+              ) : (
+                <>
+                  {loading ? (
+                    <div className="flex flex-col items-center gap-2 py-8 text-slate-400">
+                      <Loader2 size={24} className="animate-spin text-indigo-500" />
+                      <span className="text-[10px] font-black uppercase tracking-widest animate-pulse">Consulting Scrolls...</span>
+                    </div>
+                  ) : preview ? (
+                    <div className="space-y-4">
+                      <p 
+                        className={`font-serif text-slate-900 dark:text-slate-100 leading-relaxed ${isGreek ? 'text-sm text-left' : 'text-xl text-right'}`} 
+                        dir={isGreek ? "ltr" : "rtl"}
+                      >
+                        {preview.he}{isRange && " ..."}
+                      </p>
+                      <p className="text-sm text-slate-600 dark:text-slate-400 leading-relaxed italic border-l-2 border-slate-100 dark:border-slate-800 pl-3">
+                        {preview.en}{isRange && " ..."}
+                      </p>
+                    </div>
+                  ) : (
+                    <p className="text-xs text-slate-400 italic py-4">Preview unavailable.</p>
+                  )}
+                </>
+              )}
+            </div>
+
+            {/* Mobile Touch Helper Footer */}
+            {isTouch && (
+              <div className="px-4 py-2 bg-slate-50 dark:bg-slate-950 border-t border-slate-100 dark:border-slate-800 flex justify-center">
+                <span className="text-[9px] font-bold text-slate-400 uppercase tracking-tighter">Tap outside to close</span>
+              </div>
             )}
 
             <div 

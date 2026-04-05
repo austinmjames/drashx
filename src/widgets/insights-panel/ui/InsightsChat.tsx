@@ -3,7 +3,10 @@
 
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { User as SupabaseUser } from '@supabase/supabase-js';
-import { Mail, Send, Loader2, AtSign, Users as UsersIcon, User } from 'lucide-react';
+import { 
+  Mail, Send, Loader2, AtSign, Users as UsersIcon, 
+  User 
+} from 'lucide-react';
 import Image from 'next/image';
 import { useRouter } from 'next/navigation';
 import { supabase } from '../../../shared/api/supabase';
@@ -125,13 +128,16 @@ const AvatarCircle = ({ avatarUrl, name, size = "sm" }: { avatarUrl?: string | n
       ) : isCustomAvatar ? (
         <CustomIconComp size={size === "sm" ? 14 : 18} strokeWidth={2.5} />
       ) : (
-        <span className="select-none">{initial}</span>
+        <span className="select-none font-black">{initial}</span>
       )}
     </div>
   );
 };
 
-export const InsightsChat = ({ groupId, user, groupName, groupColor = 'indigo', myUsername, onChatOpened }: InsightsChatProps) => {
+export const InsightsChat = ({ 
+  groupId, user, groupName, groupColor = 'indigo', 
+  myUsername, onChatOpened
+}: InsightsChatProps) => {
   const router = useRouter();
   const [messages, setMessages] = useState<Message[]>([]);
   const [newMessage, setNewMessage] = useState('');
@@ -140,6 +146,10 @@ export const InsightsChat = ({ groupId, user, groupName, groupColor = 'indigo', 
   const [mentionSuggestions, setMentionSuggestions] = useState<MentionProfile[]>([]);
   const [showMentions, setShowMentions] = useState(false);
   const [mentionQuery, setMentionQuery] = useState('');
+  
+  // Track hovered/touched message for mobile timestamp display
+  const [activeMessageId, setActiveMessageId] = useState<string | null>(null);
+
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -159,24 +169,16 @@ export const InsightsChat = ({ groupId, user, groupName, groupColor = 'indigo', 
 
   useEffect(() => {
     let isMounted = true;
-    
     const init = async () => { 
-      // Instantly clear old messages to prevent stale UI during group switch
-      if (isMounted) {
-        setIsLoading(true);
-        setMessages([]); 
-      }
+      if (isMounted) { setIsLoading(true); setMessages([]); }
       onChatOpened(); 
       updateLastRead(); 
       await fetchMessages(isMounted); 
     };
-    
     init();
-    
     const channel = supabase?.channel(`chat-view-${groupId}`).on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'group_messages', filter: `group_id=eq.${groupId}` }, () => {
       if (isMounted) { fetchMessages(true); updateLastRead(); }
     }).subscribe();
-    
     return () => { isMounted = false; if (channel) supabase?.removeChannel(channel); };
   }, [groupId, onChatOpened, fetchMessages, updateLastRead]);
 
@@ -190,33 +192,22 @@ export const InsightsChat = ({ groupId, user, groupName, groupColor = 'indigo', 
       if ('here'.startsWith(q)) staticSuggestions.push({ username: 'here', display_name: 'Everyone active', avatar_url: null, isSystem: true });
       if ('everyone'.startsWith(q)) staticSuggestions.push({ username: 'everyone', display_name: 'The whole group', avatar_url: null, isSystem: true });
       const uniqueProfiles = new Map<string, MentionProfile>();
-      
       messages.forEach(m => { 
         const p = Array.isArray(m.profiles) ? m.profiles[0] : m.profiles;
-        if (p && p.username) {
-          uniqueProfiles.set(p.username, { 
-            username: p.username, 
-            display_name: p.display_name || null, 
-            avatar_url: p.avatar_url || null 
-          }); 
-        }
+        if (p && p.username) uniqueProfiles.set(p.username, { username: p.username, display_name: p.display_name || null, avatar_url: p.avatar_url || null }); 
       });
-      
       try {
         const { data: memberData } = await supabase.from('group_members').select(`profiles:user_id (username, display_name, avatar_url)`).eq('group_id', groupId);
         if (memberData) {
-          memberData.forEach((m: unknown) => { 
-            const record = m as { profiles: MentionProfile | MentionProfile[] | null }; 
-            const p = Array.isArray(record.profiles) ? record.profiles[0] : record.profiles; 
+          (memberData as unknown as { profiles: MentionProfile | MentionProfile[] | null }[]).forEach((m) => { 
+            const p = Array.isArray(m.profiles) ? m.profiles[0] : m.profiles; 
             if (p && p.username) uniqueProfiles.set(p.username, { username: p.username, display_name: p.display_name || null, avatar_url: p.avatar_url || null }); 
           }); 
         }
-      } catch (err) { console.warn("Could not fetch full member list from DB", err); }
-      
+      } catch (err) { console.warn(err); }
       const profileSuggestions = Array.from(uniqueProfiles.values()).filter(p => (p.username && p.username.toLowerCase().includes(q)) || (p.display_name && p.display_name.toLowerCase().includes(q)));
       setMentionSuggestions([...staticSuggestions, ...profileSuggestions].slice(0, 4));
     };
-    
     const timeoutId = setTimeout(searchMentions, 150);
     return () => clearTimeout(timeoutId);
   }, [mentionQuery, showMentions, groupId, messages]);
@@ -235,20 +226,17 @@ export const InsightsChat = ({ groupId, user, groupName, groupColor = 'indigo', 
   };
 
   const selectMention = (profile: MentionProfile) => {
-    const cursorPosition = inputRef.current?.selectionStart || 0;
-    const textBeforeCursor = newMessage.slice(0, cursorPosition);
-    const textAfterCursor = newMessage.slice(cursorPosition);
-    const lastAtPos = textBeforeCursor.lastIndexOf('@');
+    const lastAtPos = newMessage.slice(0, inputRef.current?.selectionStart || 0).lastIndexOf('@');
     const before = newMessage.slice(0, lastAtPos);
-    const completed = `${before}@${profile.username} ${textAfterCursor}`;
-    setNewMessage(completed);
+    const textAfterCursor = newMessage.slice(inputRef.current?.selectionStart || 0);
+    setNewMessage(`${before}@${profile.username} ${textAfterCursor}`);
     setShowMentions(false);
-    setTimeout(() => { if (inputRef.current) { const newPos = before.length + profile.username.length + 2; inputRef.current.focus(); inputRef.current.setSelectionRange(newPos, newPos); } }, 0);
+    setTimeout(() => inputRef.current?.focus(), 0);
   };
 
   const handleSendMessage = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newMessage.trim() || isSending || !user || !supabase) return;
+    if (!newMessage.trim() || isSending || !user) return;
     setIsSending(true);
     const { error } = await supabase.from('group_messages').insert({ content: newMessage, group_id: groupId, user_id: user.id, has_mention: newMessage.includes('@') });
     if (!error) { setNewMessage(''); setShowMentions(false); updateLastRead(); }
@@ -257,39 +245,18 @@ export const InsightsChat = ({ groupId, user, groupName, groupColor = 'indigo', 
 
   const renderMessageContent = (content: string) => {
     const referenceParts = splitTextByReferences(content);
-    const handleRefJump = (b: string, c: number, v: number) => router.push(getVersePath(b, c, v));
-
     return referenceParts.map((part, partIdx) => {
       if (typeof part !== 'string') {
         const ref = part as ParsedReference;
-        return (
-          <ReferenceLink
-            key={`ref-${partIdx}`}
-            book={ref.book}
-            chapter={ref.chapter}
-            verse={ref.verse}
-            label={ref.originalText} 
-            onClick={handleRefJump}
-            className="mx-0.5"
-          />
-        );
+        return <ReferenceLink key={`ref-${partIdx}`} book={ref.book} chapter={ref.chapter} verse={ref.verse} label={ref.originalText} onClick={(b,c,v) => router.push(getVersePath(b,c,v))} className="mx-0.5" />;
       }
-
       const mentionParts = part.split(/(@\w+)/g);
       return mentionParts.map((mPart, mIdx) => {
         if (mPart.startsWith('@')) {
-          const username = mPart.slice(1).toLowerCase();
-          const isSpecialMention = ['here', 'everyone', myUsername.toLowerCase()].includes(username);
-          if (isSpecialMention) {
-            return (
-              <span key={`mention-${mIdx}`} className={`px-1.5 py-0.5 rounded-md font-bold ring-1 ring-inset transition-colors ${getMentionColorClasses(groupColor)}`}>
-                {mPart}
-              </span>
-            );
-          }
-          return <span key={`mention-${mIdx}`} className="font-bold opacity-90 underline decoration-dotted underline-offset-2">{mPart}</span>;
+          const isSpecial = ['here', 'everyone', myUsername.toLowerCase()].includes(mPart.slice(1).toLowerCase());
+          return <span key={`m-${mIdx}`} className={`px-1.5 py-0.5 rounded-md font-bold transition-colors ${isSpecial ? getMentionColorClasses(groupColor) : 'opacity-90 underline decoration-dotted underline-offset-2'}`}>{mPart}</span>;
         }
-        return <span key={`text-${mIdx}`}>{mPart}</span>;
+        return <span key={`t-${mIdx}`}>{mPart}</span>;
       });
     });
   };
@@ -300,59 +267,68 @@ export const InsightsChat = ({ groupId, user, groupName, groupColor = 'indigo', 
         <div className="flex-1 overflow-y-auto p-4 space-y-6">
           {[1, 2, 3, 4].map(i => (
             <div key={i} className={`flex gap-3 ${i % 2 === 0 ? 'flex-row-reverse' : 'flex-row'}`}>
-              <div className="w-6 h-6 rounded-full bg-slate-100 dark:bg-slate-800 animate-pulse shrink-0 mt-1" />
+              <div className="w-8 h-8 rounded-full bg-slate-100 dark:bg-slate-800 animate-pulse shrink-0" />
               <div className={`flex flex-col gap-1.5 ${i % 2 === 0 ? 'items-end' : 'items-start'} w-full`}>
                 <div className="w-16 h-2 bg-slate-100 dark:bg-slate-800 rounded animate-pulse" />
-                <div className={`h-10 bg-slate-50 dark:bg-slate-900/50 rounded-2xl animate-pulse ${i % 2 === 0 ? 'w-2/3 rounded-tr-none' : 'w-3/4 rounded-tl-none'}`} />
+                <div className={`h-12 bg-slate-50 dark:bg-slate-900/50 rounded-2xl animate-pulse ${i % 2 === 0 ? 'w-2/3 rounded-tr-none' : 'w-3/4 rounded-tl-none'}`} />
               </div>
             </div>
           ))}
-        </div>
-        <div className="shrink-0 p-4 border-t border-slate-100 dark:border-slate-800">
-          <div className="h-12 bg-slate-50 dark:bg-slate-900 rounded-2xl animate-pulse w-full" />
         </div>
       </div>
     );
   }
 
   return (
-    <div className="h-full flex flex-col bg-white dark:bg-slate-950 animate-in slide-in-from-top-4 duration-300 relative">
+    <div className="h-full flex flex-col bg-white dark:bg-slate-950 animate-in slide-in-from-top-4 duration-300 relative select-none">
       
-      <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden p-4 space-y-6 scrollbar-hide insights-scroll-container isolate" ref={scrollRef}>
+      {/* CHAT MESSAGES */}
+      <div 
+        className="flex-1 min-h-0 overflow-y-auto p-4 space-y-6 scrollbar-hide insights-scroll-container isolate overscroll-contain" 
+        ref={scrollRef}
+      >
         {messages.length === 0 ? (
-          <div className="h-full flex flex-col items-center justify-center text-slate-400 text-center p-10 gap-3"><Mail size={40} className="opacity-10" /><p className="text-sm font-medium italic">Start a conversation with {groupName}</p></div>
+          <div className="h-full flex flex-col items-center justify-center text-slate-400 text-center p-10 gap-3 opacity-20">
+            <Mail size={40} />
+            <p className="text-sm font-medium italic">Start a conversation with {groupName}</p>
+          </div>
         ) : (
           messages.map((msg) => {
             const isMe = msg.user_id === user?.id;
-            
             const profile = Array.isArray(msg.profiles) ? msg.profiles[0] : msg.profiles;
             const displayName = profile?.display_name || profile?.username || 'Unknown';
             const avatarUrl = profile?.avatar_url || null;
+            const isMentioned = !isMe && myUsername && (msg.content.toLowerCase().includes(`@${myUsername.toLowerCase()}`) || msg.content.includes('@here') || msg.content.includes('@everyone'));
 
-            const contentLower = msg.content.toLowerCase();
-            const myUserLower = myUsername ? `@${myUsername.toLowerCase()}` : null;
-            const isMentioned = !isMe && myUserLower !== null && (contentLower.includes(myUserLower) || contentLower.includes('@here') || contentLower.includes('@everyone'));
-
-            const bubbleBaseClasses = isMentioned 
-              ? getMentionBubbleClasses(groupColor, isMe)
-              : isMe 
-                ? 'bg-indigo-600 text-white rounded-tr-none border border-transparent'
-                : 'bg-slate-50 dark:bg-slate-900 text-slate-800 dark:text-slate-200 rounded-tl-none border border-slate-100 dark:border-slate-800';
+            const isHovered = activeMessageId === msg.id;
 
             return (
               <div 
                 key={msg.id} 
-                className={`flex gap-3 relative transition-all duration-200 hover:z-50 ${isMe ? 'flex-row-reverse' : 'flex-row'}`}
+                className={`flex gap-2.5 relative transition-all duration-200 ${isMe ? 'flex-row-reverse' : 'flex-row'}`}
+                onMouseEnter={() => setActiveMessageId(msg.id)}
+                onMouseLeave={() => setActiveMessageId(null)}
+                onTouchStart={() => setActiveMessageId(msg.id)}
               >
                 <div className="shrink-0 mt-1">
                   <AvatarCircle avatarUrl={avatarUrl} name={displayName} size="sm" />
                 </div>
-                <div className={`flex flex-col min-w-0 ${isMe ? 'items-end' : 'items-start'}`}>
-                  <div className={`flex items-center gap-2 mb-1 px-1 ${isMe ? 'flex-row-reverse' : 'flex-row'}`}>
-                    <span className="text-[10px] font-bold text-slate-500 dark:text-slate-400">{displayName}</span>
-                    <span className="text-[9px] text-slate-300 dark:text-slate-600">{formatTimestamp(msg.created_at)}</span>
+                <div className={`flex flex-col min-w-0 max-w-[85%] ${isMe ? 'items-end' : 'items-start'}`}>
+                  <div className={`flex items-center gap-2 mb-0.5 px-1 ${isMe ? 'flex-row-reverse' : 'flex-row'}`}>
+                    <span className="text-[10px] font-black text-slate-500 dark:text-slate-400">{displayName}</span>
+                    <span className={`text-[8px] font-bold text-slate-300 dark:text-slate-600 transition-opacity duration-300 ${isHovered ? 'opacity-100' : 'opacity-0 sm:group-hover:opacity-100'}`}>
+                      {formatTimestamp(msg.created_at)}
+                    </span>
                   </div>
-                  <div className={`max-w-[85%] px-4 py-2.5 rounded-2xl text-sm leading-relaxed shadow-sm ring-1 ring-black/5 ${bubbleBaseClasses} group/bubble hover:overflow-visible`}>
+                  <div 
+                    className={`px-4 py-2.5 rounded-2xl text-sm leading-relaxed shadow-sm ring-1 ring-black/5 transition-all ${
+                      isMentioned 
+                        ? getMentionBubbleClasses(groupColor, isMe) 
+                        : isMe 
+                          ? 'bg-indigo-600 text-white rounded-tr-none border border-transparent active:bg-indigo-700' 
+                          : 'bg-white dark:bg-slate-900 text-slate-800 dark:text-slate-200 rounded-tl-none border border-slate-100 dark:border-slate-800 active:bg-slate-50'
+                    }`}
+                  >
                     {renderMessageContent(msg.content)}
                   </div>
                 </div>
@@ -362,21 +338,40 @@ export const InsightsChat = ({ groupId, user, groupName, groupColor = 'indigo', 
         )}
       </div>
 
-      <form onSubmit={handleSendMessage} className="shrink-0 p-4 bg-slate-50 dark:bg-slate-900 border-t border-slate-200 dark:border-slate-800 relative z-20">
+      {/* INPUT FORM */}
+      <form onSubmit={handleSendMessage} className="shrink-0 p-4 pb-6 bg-white dark:bg-slate-950 border-t border-slate-100 dark:border-slate-900 relative z-40">
         {showMentions && mentionSuggestions.length > 0 && (
-          <div className="absolute bottom-full left-4 mb-2 w-72 bg-white dark:bg-slate-800 rounded-xl shadow-2xl border border-slate-200 dark:border-slate-700 overflow-hidden animate-in slide-in-from-bottom-2 duration-200 z-10">
-            <div className="p-2 border-b border-slate-100 dark:border-slate-700 bg-slate-50 dark:bg-slate-900/50 flex items-center gap-2"><AtSign size={12} className="text-indigo-500" /><span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Mentions</span></div>
+          <div className="absolute bottom-full left-4 mb-2 w-72 bg-white dark:bg-slate-900 rounded-2xl shadow-2xl border border-slate-200 dark:border-slate-800 overflow-hidden animate-in slide-in-from-bottom-2 duration-200 z-50">
+            <div className="p-2 border-b border-slate-100 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-950/50 flex items-center gap-2">
+              <AtSign size={12} className="text-indigo-500" />
+              <span className="text-[9px] font-black text-slate-400 uppercase tracking-widest">Mentions</span>
+            </div>
             {mentionSuggestions.map((profile) => (
-              <button key={profile.username} type="button" onClick={() => selectMention(profile)} className="w-full flex items-center gap-3 p-3 hover:bg-slate-50 dark:hover:bg-slate-700/50 transition-colors text-left border-b border-slate-50 dark:border-slate-700/50 last:border-0">
+              <button key={profile.username} type="button" onClick={() => selectMention(profile)} className="w-full flex items-center gap-3 p-3 hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors text-left border-b border-slate-50 dark:border-slate-800/50 last:border-0">
                 {profile.isSystem ? <div className="w-8 h-8 rounded-full bg-slate-200 dark:bg-slate-700 flex items-center justify-center text-indigo-500"><UsersIcon size={14} /></div> : <AvatarCircle avatarUrl={profile.avatar_url} name={profile.display_name || profile.username} size="md" />}
-                <div className="flex flex-col min-w-0"><span className="text-xs font-bold text-slate-800 dark:text-slate-100 truncate">{profile.display_name ? `${profile.display_name} (@${profile.username})` : `@${profile.username}`}</span><span className="text-[10px] text-slate-400 truncate italic">{profile.isSystem ? 'System Mention' : 'Group Member'}</span></div>
+                <div className="flex flex-col min-w-0">
+                  <span className="text-xs font-black text-slate-800 dark:text-slate-100 truncate">@{profile.username}</span>
+                  <span className="text-[10px] text-slate-400 truncate">{profile.display_name || 'Group Member'}</span>
+                </div>
               </button>
             ))}
           </div>
         )}
-        <div className="relative flex items-center">
-          <input ref={inputRef} aria-label={`Message ${groupName}`} value={newMessage} onChange={handleInputChange} placeholder={`Message ${groupName}...`} className="w-full bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-2xl py-3 pl-4 pr-12 text-sm outline-none focus:border-indigo-500 focus:ring-4 focus:ring-indigo-500/10 transition-all shadow-sm" />
-          <button type="submit" title="Send Message" disabled={!newMessage.trim() || isSending} className="absolute right-2 p-2 bg-indigo-600 text-white rounded-xl hover:bg-indigo-700 disabled:opacity-30 transition-all shadow-md shadow-indigo-600/20 active:scale-95">{isSending ? <Loader2 size={16} className="animate-spin" /> : <Send size={16} />}</button>
+        <div className="relative flex items-center group">
+          <input 
+            ref={inputRef} 
+            value={newMessage} 
+            onChange={handleInputChange} 
+            placeholder={`Message ${groupName}...`} 
+            className="w-full bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl py-3.5 pl-4 pr-12 text-sm outline-none focus:border-indigo-500 focus:bg-white dark:focus:bg-slate-950 focus:ring-4 focus:ring-indigo-500/10 transition-all shadow-inner" 
+          />
+          <button 
+            type="submit" 
+            disabled={!newMessage.trim() || isSending} 
+            className="absolute right-2 p-2 bg-indigo-600 text-white rounded-xl hover:bg-indigo-700 disabled:opacity-30 transition-all shadow-lg shadow-indigo-600/20 active:scale-90"
+          >
+            {isSending ? <Loader2 size={16} className="animate-spin" /> : <Send size={16} />}
+          </button>
         </div>
       </form>
     </div>

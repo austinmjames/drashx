@@ -1,10 +1,9 @@
 // Path: src/features/lexicon/ui/ReferencesTab.tsx
 import React, { RefObject, useMemo } from 'react';
-import { Search, ArrowRight, Loader2 } from 'lucide-react';
+import { Search, ArrowRight, Loader2, BookOpen } from 'lucide-react';
 import { HebrewVerseRenderer } from '../../../entities/verse/ui/HebrewVerseRenderer';
 import { GreekVerseRenderer } from '../../../entities/verse/ui/GreekVerseRenderer';
 import { VerseWord } from '../../../entities/verse/ui/VerseCard';
-import { ReferenceLink } from '../../../shared/ui/ReferenceLink';
 
 export interface ReferenceItem {
   book_name: string;
@@ -52,13 +51,14 @@ export const ReferencesTab = ({
             {references.map((ref, idx) => (
               <div key={idx} className="py-5 group cursor-default space-y-3">
                 <div className="flex items-center gap-2">
-                  <ReferenceLink 
-                    book={ref.book_name} 
-                    chapter={ref.chapter_number} 
-                    verse={ref.verse_number} 
+                  <button 
                     onClick={() => onReferenceClick?.(ref.book_name, ref.chapter_number, ref.verse_number)}
-                    hidePreview={true} 
-                  />
+                    className="inline-flex items-center gap-1.5 px-2 py-0.5 text-[10px] font-black rounded-md border shadow-sm transition-all active:scale-95 bg-slate-100 dark:bg-slate-800/40 text-slate-600 dark:text-slate-400 border-slate-200 dark:border-slate-800 hover:bg-slate-200 dark:hover:bg-slate-800 hover:text-slate-900 dark:hover:text-white group/link"
+                    title={`Jump to ${ref.book_name} ${ref.chapter_number}:${ref.verse_number}`}
+                  >
+                    <BookOpen size={12} className="text-indigo-500 shrink-0" />
+                    {ref.book_name} {ref.chapter_number}:{ref.verse_number}
+                  </button>
                   <div className="h-px grow bg-slate-50 dark:bg-slate-800" />
                   <ArrowRight size={12} className="text-slate-300 opacity-0 group-hover:opacity-100 transition-opacity" />
                 </div>

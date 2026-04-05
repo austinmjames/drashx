@@ -39,6 +39,11 @@ interface ProfilePreferences {
   last_book?: string | null;
   last_chapter?: number | null;
 }
+export interface HistoryLocation {
+  book: string;
+  chapter: number;
+  verse?: number;
+}
 
 const VerseSkeleton = () => (
   <div className="p-6 border-b border-slate-100 dark:border-slate-800 animate-pulse space-y-6">
@@ -70,18 +75,18 @@ export const ReaderPage = ({ bookName, chapterNumber, initialVerses, initialHebr
   const [languageMode, setLanguageMode] = useState<'both' | 'en' | 'he'>('both');
   const [hebrewStyle, setHebrewStyle] = useState<'niqqud' | 'no-niqqud'>('niqqud');
   
-  // Base preferred translation state
   const [translation, setTranslation] = useState<string>('default');
 
   const [user, setUser] = useState<SupabaseUser | null>(null);
   const [activeGroupId, setActiveGroupId] = useState<string | null>(null);
   const [myGroups, setMyGroups] = useState<Group[]>([]);
 
-  // Dynamic Translation States
   const [availableTranslations, setAvailableTranslations] = useState<{slug: string, name: string}[]>([]);
   const [activeTranslation, setActiveTranslation] = useState<string>('JPS');
 
-  // FIX: Properly case the book name for display in Header and SEO
+  // --- Reference Navigation Backstack ---
+  const [navigationHistory, setNavigationHistory] = useState<HistoryLocation[]>([]);
+
   const activeBook = useMemo(() => {
     const rawName = (params?.book as string) || String(bookName || 'Genesis');
     return decodeURIComponent(rawName)
@@ -96,7 +101,6 @@ export const ReaderPage = ({ bookName, chapterNumber, initialVerses, initialHebr
 
   const activeChapter = Number(params?.chapter ?? chapterNumber ?? 1);
 
-  // --- State Initialization with Props (SSR Optimization) ---
   const [verses, setVerses] = useState<Verse[]>(initialVerses || []);
   const [hebrewTitle, setHebrewTitle] = useState(initialHebrewTitle || '');
   const [isLoading, setIsLoading] = useState(!initialVerses); 
@@ -105,10 +109,8 @@ export const ReaderPage = ({ bookName, chapterNumber, initialVerses, initialHebr
   const [selectedStrongs, setSelectedStrongs] = useState<string | null>(null);
   const [selectedWordContext, setSelectedWordContext] = useState<VerseWord | null>(null);
 
-  // Track the last loaded state to prevent redundant fetches
   const dataRef = useRef({ book: activeBook, chapter: activeChapter, slug: activeTranslation });
 
-  // --- Navigation Support: Scrolling Logic ---
   const scrollToVerse = useCallback((vNum: number) => {
     setTimeout(() => {
       const element = document.getElementById(`verse-${vNum}`);
@@ -131,8 +133,7 @@ export const ReaderPage = ({ bookName, chapterNumber, initialVerses, initialHebr
     const handleJumpEvent = (e: Event) => {
       const customEvent = e as CustomEvent<{ book: string; chapter: number; verse: number }>;
       const { book, chapter, verse } = customEvent.detail;
-      const currentBook = decodeURIComponent(activeBook);
-      if (currentBook === book && activeChapter === chapter) {
+      if (activeBook === book && activeChapter === chapter) {
         scrollToVerse(verse);
       }
     };
@@ -140,7 +141,41 @@ export const ReaderPage = ({ bookName, chapterNumber, initialVerses, initialHebr
     return () => window.removeEventListener('reader-jump-to-verse', handleJumpEvent);
   }, [activeBook, activeChapter, scrollToVerse]);
 
-  // --- Add Global Lexicon Pivot Listener ---
+  // --- Global History Logger ---
+  useEffect(() => {
+    const handleLogHistory = () => {
+      setNavigationHistory(prev => {
+        const currentLoc: HistoryLocation = {
+          book: activeBook,
+          chapter: activeChapter,
+          verse: selectedVerse?.verse_num || selectedVerse?.verse_number
+        };
+        
+        // Prevent duplicate consecutive entries if user clicks multiple links without moving
+        const last = prev[prev.length - 1];
+        if (last && last.book === currentLoc.book && last.chapter === currentLoc.chapter && last.verse === currentLoc.verse) {
+          return prev;
+        }
+        return [...prev, currentLoc];
+      });
+    };
+    window.addEventListener('reader-log-history', handleLogHistory);
+    return () => window.removeEventListener('reader-log-history', handleLogHistory);
+  }, [activeBook, activeChapter, selectedVerse]);
+
+  const handleGoBack = useCallback(() => {
+    setNavigationHistory(prev => {
+      if (prev.length === 0) return prev;
+      const newHistory = [...prev];
+      const lastLoc = newHistory.pop();
+      if (lastLoc) {
+        const path = `/read/${encodeURIComponent(lastLoc.book)}/${lastLoc.chapter}${lastLoc.verse ? `?v=${lastLoc.verse}` : ''}`;
+        router.push(path);
+      }
+      return newHistory;
+    });
+  }, [router]);
+
   useEffect(() => {
     const handleLexiconPivot = (e: Event) => {
       const customEvent = e as CustomEvent<string>;
@@ -151,7 +186,6 @@ export const ReaderPage = ({ bookName, chapterNumber, initialVerses, initialHebr
     return () => window.removeEventListener('lexicon-pivot', handleLexiconPivot);
   }, []);
 
-  // --- Profile Preference Logic ---
   useEffect(() => {
     if (typeof window !== 'undefined' && window.innerWidth < 768) {
       setIsSidebarOpen(false);
@@ -169,7 +203,6 @@ export const ReaderPage = ({ bookName, chapterNumber, initialVerses, initialHebr
       if (prefs.reader_hebrew_style) setHebrewStyle(prefs.reader_hebrew_style);
       
       if (prefs.reader_translation) {
-        // LEGACY MAPPING: Map old strings to new database slugs
         const legacyMap: Record<string, string> = {
           'jps1917': 'JPS',
           'modernized': 'Modernized',
@@ -204,7 +237,6 @@ export const ReaderPage = ({ bookName, chapterNumber, initialVerses, initialHebr
     return () => subscription.unsubscribe();
   }, [fetchUserProfilePreference]);
 
-  // --- Invite Link Interceptor ---
   useEffect(() => {
     if (isAuthSettled && inviteParam) {
       if (user) {
@@ -250,19 +282,16 @@ export const ReaderPage = ({ bookName, chapterNumber, initialVerses, initialHebr
     updatePreference({ reader_hebrew_style: style });
   };
 
-  // --- Dynamic Translation & Data Fetching Effect ---
   useEffect(() => {
     const fetchVersesData = async () => {
       setIsLoading(true); 
       setFetchError(null);
       
       try {
-        // 1. Fetch Book & Collection info
         const { data: bookData } = await supabase.from('books').select('name_en, name_he, category, collection').ilike('name_en', activeBook).single();
         if (!bookData) throw new Error(`Book "${activeBook}" not found.`);
         setHebrewTitle(bookData.name_he);
         
-        // 2. CHECK ACTUAL DATA: What translations exist in the DB for this chapter?
         const { data: existingSlugsData } = await supabase
           .from('reader_verses_view')
           .select('translation_slug')
@@ -272,14 +301,11 @@ export const ReaderPage = ({ bookName, chapterNumber, initialVerses, initialHebr
 
         const actualSlugs = new Set(existingSlugsData?.map(row => row.translation_slug) || []);
 
-        // 3. Fetch ALL translation rules
         const { data: allTranslations } = await supabase.from('translations').select('*').order('name');
         
-        // 4. Hierarchical Filtering + Reality Check
         const chapterKey = `${bookData.name_en}.${activeChapter}`;
         
         const availableTrans = (allTranslations || []).filter(t => {
-          // If the translation isn't ACTUALLY in the database for this chapter, hide it!
           if (!actualSlugs.has(t.slug)) return false;
 
           if (t.target_collections?.includes(bookData.collection)) return true;
@@ -291,23 +317,18 @@ export const ReaderPage = ({ bookName, chapterNumber, initialVerses, initialHebr
 
         setAvailableTranslations(availableTrans);
 
-        // 5. Fallback logic: Determine the effective slug
         let effectiveSlug = translation;
         
-        // A. If user prefers "default", pick contextually based on the collection
         if (effectiveSlug === 'default') {
           effectiveSlug = bookData.collection === 'Christianity' ? 'WEB' : 'JPS';
         }
 
-        // B. Check if their preferred (or defaulted) translation is actually available for this book
         if (!availableTrans.some(t => t.slug === effectiveSlug)) {
-          // If not, just pick the first available translation (or fallback to context default if none exist to prevent UI crashes)
           effectiveSlug = availableTrans.length > 0 ? availableTrans[0].slug : (bookData.collection === 'Christianity' ? 'WEB' : 'JPS');
         }
         
         setActiveTranslation(effectiveSlug);
 
-        // Optimization: prevent redundant fetching
         if (dataRef.current.book === activeBook && 
             dataRef.current.chapter === activeChapter && 
             dataRef.current.slug === effectiveSlug && 
@@ -316,7 +337,6 @@ export const ReaderPage = ({ bookName, chapterNumber, initialVerses, initialHebr
           return;
         }
         
-        // 6. Fetch verses targeting only the validated translation slug
         let versesQuery = supabase
             .from('reader_verses_view')
             .select('*')
@@ -324,7 +344,6 @@ export const ReaderPage = ({ bookName, chapterNumber, initialVerses, initialHebr
             .eq('chapter_num', activeChapter)
             .order('verse_num', { ascending: true });
 
-        // FIX: If a translation exists, filter by it. If NOT, filter for null so we still get the Hebrew/Greek verses!
         if (availableTrans.length > 0) {
             versesQuery = versesQuery.eq('translation_slug', effectiveSlug);
         } else {
@@ -361,7 +380,7 @@ export const ReaderPage = ({ bookName, chapterNumber, initialVerses, initialHebr
       </aside>
 
       <main className="flex-1 flex overflow-hidden relative">
-        <section className="flex-1 overflow-y-auto border-r border-slate-100 dark:border-slate-900 scrollbar-hide flex flex-col relative scroll-smooth">
+        <section className="flex-1 border-r border-slate-100 dark:border-slate-900 flex flex-col relative bg-white dark:bg-slate-950">
           <ReaderHeader 
             isSidebarOpen={isSidebarOpen} toggleSidebar={() => setIsSidebarOpen(!isSidebarOpen)}
             isInsightsOpen={isInsightsOpen} toggleInsights={() => setIsInsightsOpen(!isInsightsOpen)}
@@ -369,38 +388,42 @@ export const ReaderPage = ({ bookName, chapterNumber, initialVerses, initialHebr
             handlePrevChapter={() => activeChapter > 1 && router.push(`/read/${encodeURIComponent(activeBook)}/${activeChapter - 1}`)}
             handleNextChapter={() => router.push(`/read/${encodeURIComponent(activeBook)}/${activeChapter + 1}`)}
             languageMode={languageMode} setLanguageMode={handleSetLanguageMode}
-            translation={translation} // Passes the raw preference (e.g. 'default') so the menu checkmarks work correctly
+            translation={translation} 
             setTranslation={handleSetTranslation}
             availableTranslations={availableTranslations}
             hebrewStyle={hebrewStyle} setHebrewStyle={handleSetHebrewStyle}
+            navigationHistory={navigationHistory}
+            handleGoBack={handleGoBack}
           />
-          <div className="max-w-3xl mx-auto py-6 md:py-8 w-full flex-1 md:px-6">
-            {isLoading ? (
-              <div className="space-y-4">
-                {[...Array(6)].map((_, i) => <VerseSkeleton key={i} />)}
-              </div>
-            ) : fetchError ? (
-              <div className="flex flex-col items-center justify-center h-64 text-rose-500 gap-4">
-                <AlertCircle size={48}/>
-                <p>{fetchError}</p>
-              </div>
-            ) : (
-              verses.map((v) => (
-                <div key={v.verse_id || v.id} id={`verse-${v.verse_num || v.verse_number}`} className="scroll-mt-24">
-                  <VerseCard 
-                    verse={v} 
-                    active={(selectedVerse?.verse_id || selectedVerse?.id) === (v.verse_id || v.id)} 
-                    languageMode={languageMode} 
-                    hebrewStyle={hebrewStyle} 
-                    translation={activeTranslation} // VerseCard still gets the resolved text (e.g. 'Modernized')
-                    onClick={() => { setSelectedVerse(v); setIsInsightsOpen(true); }}
-                    onWordClick={(w) => { setSelectedStrongs(w.strongs); setSelectedWordContext(w); }} 
-                    groupId={activeGroupId}
-                    userId={user?.id || null}
-                  />
+          <div className="flex-1 overflow-y-auto scrollbar-hide scroll-smooth w-full">
+            <div className="max-w-3xl mx-auto py-6 md:py-8 w-full md:px-6">
+              {isLoading ? (
+                <div className="space-y-4">
+                  {[...Array(6)].map((_, i) => <VerseSkeleton key={i} />)}
                 </div>
-              ))
-            )}
+              ) : fetchError ? (
+                <div className="flex flex-col items-center justify-center h-64 text-rose-500 gap-4">
+                  <AlertCircle size={48}/>
+                  <p>{fetchError}</p>
+                </div>
+              ) : (
+                verses.map((v) => (
+                  <div key={v.verse_id || v.id} id={`verse-${v.verse_num || v.verse_number}`} className="scroll-mt-24">
+                    <VerseCard 
+                      verse={v} 
+                      active={(selectedVerse?.verse_id || selectedVerse?.id) === (v.verse_id || v.id)} 
+                      languageMode={languageMode} 
+                      hebrewStyle={hebrewStyle} 
+                      translation={activeTranslation} 
+                      onClick={() => { setSelectedVerse(v); setIsInsightsOpen(true); }}
+                      onWordClick={(w) => { setSelectedStrongs(w.strongs); setSelectedWordContext(w); }} 
+                      groupId={activeGroupId}
+                      userId={user?.id || null}
+                    />
+                  </div>
+                ))
+              )}
+            </div>
           </div>
         </section>
         <div className={`${isInsightsOpen ? 'translate-x-0' : 'translate-x-full md:translate-x-0'} absolute md:relative z-40 inset-y-0 right-0 h-full bg-white dark:bg-slate-950 md:bg-transparent transition-transform duration-300 w-full md:w-auto md:flex`}>
