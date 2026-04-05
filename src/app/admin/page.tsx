@@ -1,8 +1,4 @@
-/**
- * Path: src/app/admin/page.tsx
- * FIXED: Re-implemented manual time filtering for Top Comments.
- * FIXED: Optimized fetchDashboardData to respect the topCommentsTimegrain state.
- */
+// Filepath: app/admin/page.tsx
 'use client';
 
 import React, { useState, useEffect, useCallback } from 'react';
@@ -17,8 +13,19 @@ import { UserListWidget } from '@/widgets/admin/ui/UserListWidget';
 import { TopCommentsWidget } from '@/widgets/admin/ui/TopCommentsWidget';
 import { BroadcastWidget } from '@/widgets/admin/ui/BroadcastWidget';
 
-interface UserStat { period: string; new_users: number; total_users: number; }
-interface ActivityStat { period: string; total_comments: number; total_replies: number; total_likes: number; }
+// --- Types ---
+interface UserStat {
+  period: string;
+  new_users: number;
+  total_users: number;
+}
+
+interface ActivityStat {
+  period: string;
+  total_comments: number;
+  total_replies: number;
+  total_likes: number;
+}
 
 export interface AdminUser {
   id: string;
@@ -44,7 +51,7 @@ export interface TopComment {
   reply_count: number;
 }
 
-export default function AdminPage() {
+export default function AdminDashboardController() {
   const router = useRouter();
   const [timegrain, setTimegrain] = useState('month');
   const [topCommentsTimegrain, setTopCommentsTimegrain] = useState('all'); 
@@ -64,41 +71,45 @@ export default function AdminPage() {
     try {
       if (!supabase) throw new Error("Supabase client is not initialized.");
 
-      const { data: authData, error: authError } = await supabase.auth.getUser();
-      if (authError || !authData.user) {
+      const { data: { user }, error: authError } = await supabase.auth.getUser();
+      if (authError || !user) {
         router.push('/');
         return;
       }
 
-      const { data: profile } = await supabase
+      const { data: profile, error: profileError } = await supabase
         .from('profiles')
         .select('is_admin')
-        .eq('id', authData.user.id)
+        .eq('id', user.id)
         .single();
 
-      if (!profile?.is_admin) {
+      if (profileError || !profile?.is_admin) {
         router.push('/');
         return;
       }
 
-      // --- Filter Logic for Top Comments ---
-      let topCommentsQuery = supabase
-        .from('admin_top_replied_comments_view')
-        .select('*');
-      
+      const uStatsPromise = supabase.rpc('admin_get_user_stats', { timegrain });
+      const aStatsPromise = supabase.rpc('admin_get_activity_stats', { timegrain });
+      const uListPromise = supabase
+        .from('admin_user_list_view')
+        .select('*')
+        .order('total_interactions', { ascending: false })
+        .limit(100);
+
+      let topQuery = supabase.from('admin_top_replied_comments_view').select('*');
       if (topCommentsTimegrain !== 'all') {
         const d = new Date();
         if (topCommentsTimegrain === 'week') d.setDate(d.getDate() - 7);
-        else if (topCommentsTimegrain === 'month') d.setDate(d.getDate() - 30);
-        else if (topCommentsTimegrain === 'year') d.setDate(d.getDate() - 365);
-        topCommentsQuery = topCommentsQuery.gte('created_at', d.toISOString());
+        if (topCommentsTimegrain === 'month') d.setDate(d.getDate() - 30);
+        if (topCommentsTimegrain === 'year') d.setDate(d.getDate() - 365);
+        topQuery = topQuery.gte('created_at', d.toISOString());
       }
+      
+      // FIX: Changed limit from 100 to 5 for Top Comments
+      const tCommentsPromise = topQuery.order('reply_count', { ascending: false }).limit(5); 
 
       const [uStats, aStats, uList, tComments] = await Promise.all([
-        supabase.rpc('admin_get_user_stats', { timegrain }),
-        supabase.rpc('admin_get_activity_stats', { timegrain }),
-        supabase.from('admin_user_list_view').select('*').order('total_interactions', { ascending: false }).limit(100),
-        topCommentsQuery.order('reply_count', { ascending: false }).limit(100)
+        uStatsPromise, aStatsPromise, uListPromise, tCommentsPromise
       ]);
 
       if (uStats.error) throw uStats.error;
@@ -113,7 +124,13 @@ export default function AdminPage() {
 
     } catch (err: unknown) {
       console.error("Failed to fetch admin data", err);
-      setError(err instanceof Error ? err.message : "An unexpected error occurred.");
+      let errMsg = "An unexpected error occurred.";
+      if (err instanceof Error) { errMsg = err.message; } 
+      else if (typeof err === 'object' && err !== null) {
+        const dbErr = err as Record<string, unknown>;
+        errMsg = (dbErr.message as string) || (dbErr.details as string) || JSON.stringify(err);
+      }
+      setError(errMsg);
     } finally {
       setLoading(false);
     }
@@ -152,10 +169,10 @@ export default function AdminPage() {
         ) : error ? (
           <div className="bg-red-50 text-red-600 p-6 rounded-xl border border-red-200 text-center shadow-sm">
             <h3 className="font-bold text-lg mb-2">Error Loading Dashboard</h3>
-            <p className="text-sm mb-4">{error}</p>
-            <button onClick={fetchDashboardData} className="px-4 py-2 bg-red-100 hover:bg-red-200 text-red-700 rounded-md text-sm font-medium transition-colors">
-              Try Again
-            </button>
+            <p className="text-sm mb-4 font-mono bg-red-100 p-2 rounded inline-block">{error}</p>
+            <div className="mt-4">
+              <button onClick={fetchDashboardData} className="px-4 py-2 bg-red-100 hover:bg-red-200 text-red-700 rounded-md text-sm font-medium transition-colors">Try Again</button>
+            </div>
           </div>
         ) : (
           <>
@@ -181,17 +198,15 @@ export default function AdminPage() {
               )}
             </div>
             
-            <div className="grid grid-cols-1 xl:grid-cols-3 gap-8">
-              <div className="xl:col-span-2">
-                <UserListWidget users={users} toggleUserStatus={handleToggleUserStatus} />
-              </div>
-              <div>
-                <TopCommentsWidget 
-                  topComments={topComments} 
-                  timegrain={topCommentsTimegrain} 
-                  setTimegrain={setTopCommentsTimegrain} 
-                />
-              </div>
+            {/* STACKED LAYOUT: Platform Moderation then Top Comments */}
+            <div className="space-y-8">
+              <UserListWidget users={users} toggleUserStatus={handleToggleUserStatus} />
+              
+              <TopCommentsWidget 
+                topComments={topComments} 
+                timegrain={topCommentsTimegrain} 
+                setTimegrain={setTopCommentsTimegrain} 
+              />
             </div>
           </>
         )}
