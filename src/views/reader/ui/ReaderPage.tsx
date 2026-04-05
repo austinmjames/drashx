@@ -29,14 +29,12 @@ const ProfileSettings = dynamic(() =>
 let globalIsSidebarOpen = true;
 
 // --- Types ---
-export type TranslationOption = 'default' | 'jps1917' | 'modernized' | 'web' | 'tbv';
-
 interface Group { id: string; name: string; icon_url?: string; color_theme?: string; }
 interface GroupMemberJoin { group_id: string; groups: Group | Group[]; }
 interface ProfilePreferences {
   last_group_id?: string | null;
   reader_language_mode?: 'both' | 'en' | 'he' | null;
-  reader_translation?: TranslationOption | null; 
+  reader_translation?: string | null; 
   reader_hebrew_style?: 'niqqud' | 'no-niqqud' | null;
   last_book?: string | null;
   last_chapter?: number | null;
@@ -70,14 +68,20 @@ export const ReaderPage = ({ bookName, chapterNumber, initialVerses, initialHebr
   const [isAuthSettled, setIsAuthSettled] = useState(false);
   
   const [languageMode, setLanguageMode] = useState<'both' | 'en' | 'he'>('both');
-  const [translation, setTranslation] = useState<TranslationOption>('default');
   const [hebrewStyle, setHebrewStyle] = useState<'niqqud' | 'no-niqqud'>('niqqud');
+  
+  // Base preferred translation state
+  const [translation, setTranslation] = useState<string>('default');
 
   const [user, setUser] = useState<SupabaseUser | null>(null);
   const [activeGroupId, setActiveGroupId] = useState<string | null>(null);
   const [myGroups, setMyGroups] = useState<Group[]>([]);
 
-  // FIX: Properly case the book name (e.g. "genesis" -> "Genesis") for display in Header and SEO
+  // Dynamic Translation States
+  const [availableTranslations, setAvailableTranslations] = useState<{slug: string, name: string}[]>([]);
+  const [activeTranslation, setActiveTranslation] = useState<string>('JPS');
+
+  // FIX: Properly case the book name for display in Header and SEO
   const activeBook = useMemo(() => {
     const rawName = (params?.book as string) || String(bookName || 'Genesis');
     return decodeURIComponent(rawName)
@@ -101,22 +105,8 @@ export const ReaderPage = ({ bookName, chapterNumber, initialVerses, initialHebr
   const [selectedStrongs, setSelectedStrongs] = useState<string | null>(null);
   const [selectedWordContext, setSelectedWordContext] = useState<VerseWord | null>(null);
 
-  /**
-   * FIX: Map UI translation options to Database Slugs.
-   * This is critical to prevent "2 of every verse" errors by ensuring
-   * the query always filters for a single specific translation record.
-   */
-  const translationSlug = useMemo(() => {
-    switch (translation) {
-      case 'modernized': return 'Modernized';
-      case 'web': return 'WEB';
-      case 'tbv': return 'TBV';
-      default: return 'JPS'; // Default/JPS1917 maps to 'JPS'
-    }
-  }, [translation]);
-
   // Track the last loaded state to prevent redundant fetches
-  const dataRef = useRef({ book: activeBook, chapter: activeChapter, slug: translationSlug });
+  const dataRef = useRef({ book: activeBook, chapter: activeChapter, slug: activeTranslation });
 
   // --- Navigation Support: Scrolling Logic ---
   const scrollToVerse = useCallback((vNum: number) => {
@@ -176,8 +166,19 @@ export const ReaderPage = ({ bookName, chapterNumber, initialVerses, initialHebr
       if (prefs.last_group_id) setActiveGroupId(prefs.last_group_id);
       else setActiveGroupId(userId);
       if (prefs.reader_language_mode) setLanguageMode(prefs.reader_language_mode);
-      if (prefs.reader_translation) setTranslation(prefs.reader_translation);
       if (prefs.reader_hebrew_style) setHebrewStyle(prefs.reader_hebrew_style);
+      
+      if (prefs.reader_translation) {
+        // LEGACY MAPPING: Map old strings to new database slugs
+        const legacyMap: Record<string, string> = {
+          'jps1917': 'JPS',
+          'modernized': 'Modernized',
+          'web': 'WEB',
+          'tbv': 'TBV'
+        };
+        const mappedSlug = legacyMap[prefs.reader_translation] || prefs.reader_translation;
+        setTranslation(mappedSlug);
+      }
     }
   }, []);
 
@@ -239,7 +240,7 @@ export const ReaderPage = ({ bookName, chapterNumber, initialVerses, initialHebr
     updatePreference({ reader_language_mode: mode });
   };
 
-  const handleSetTranslation = (trans: TranslationOption) => {
+  const handleSetTranslation = (trans: string) => {
     setTranslation(trans);
     updatePreference({ reader_translation: trans });
   };
@@ -249,38 +250,91 @@ export const ReaderPage = ({ bookName, chapterNumber, initialVerses, initialHebr
     updatePreference({ reader_hebrew_style: style });
   };
 
-  // --- Data Fetching Effect (Backup + Client-Side Navigation) ---
+  // --- Dynamic Translation & Data Fetching Effect ---
   useEffect(() => {
     const fetchVersesData = async () => {
-      // Logic Fix: Only skip fetch if book, chapter, AND translation slug match the currently displayed data
-      if (dataRef.current.book === activeBook && 
-          dataRef.current.chapter === activeChapter && 
-          dataRef.current.slug === translationSlug &&
-          verses.length > 0) {
-        return;
-      }
-
       setIsLoading(true); 
       setFetchError(null);
       
       try {
-        const { data: bookData } = await supabase.from('books').select('*').ilike('name_en', activeBook).single();
+        // 1. Fetch Book & Collection info
+        const { data: bookData } = await supabase.from('books').select('name_en, name_he, category, collection').ilike('name_en', activeBook).single();
         if (!bookData) throw new Error(`Book "${activeBook}" not found.`);
         setHebrewTitle(bookData.name_he);
         
-        // FIX: Applied .eq('translation_slug', translationSlug) to the client-side fetch.
-        // This ensures that when the page hydrates or navigates, it only pulls one translation
-        // per verse, resolving the "double verse" display issue.
-        const { data: versesData } = await supabase
+        // 2. CHECK ACTUAL DATA: What translations exist in the DB for this chapter?
+        const { data: existingSlugsData } = await supabase
+          .from('reader_verses_view')
+          .select('translation_slug')
+          .eq('book_id', bookData.name_en)
+          .eq('chapter_num', activeChapter)
+          .not('translation_slug', 'is', null);
+
+        const actualSlugs = new Set(existingSlugsData?.map(row => row.translation_slug) || []);
+
+        // 3. Fetch ALL translation rules
+        const { data: allTranslations } = await supabase.from('translations').select('*').order('name');
+        
+        // 4. Hierarchical Filtering + Reality Check
+        const chapterKey = `${bookData.name_en}.${activeChapter}`;
+        
+        const availableTrans = (allTranslations || []).filter(t => {
+          // If the translation isn't ACTUALLY in the database for this chapter, hide it!
+          if (!actualSlugs.has(t.slug)) return false;
+
+          if (t.target_collections?.includes(bookData.collection)) return true;
+          if (t.target_categories?.includes(bookData.category)) return true;
+          if (t.target_books?.includes(bookData.name_en)) return true;
+          if (t.target_chapters?.includes(chapterKey)) return true;
+          return false;
+        }).map(t => ({ slug: t.slug, name: t.name }));
+
+        setAvailableTranslations(availableTrans);
+
+        // 5. Fallback logic: Determine the effective slug
+        let effectiveSlug = translation;
+        
+        // A. If user prefers "default", pick contextually based on the collection
+        if (effectiveSlug === 'default') {
+          effectiveSlug = bookData.collection === 'Christianity' ? 'WEB' : 'JPS';
+        }
+
+        // B. Check if their preferred (or defaulted) translation is actually available for this book
+        if (!availableTrans.some(t => t.slug === effectiveSlug)) {
+          // If not, just pick the first available translation (or fallback to context default if none exist to prevent UI crashes)
+          effectiveSlug = availableTrans.length > 0 ? availableTrans[0].slug : (bookData.collection === 'Christianity' ? 'WEB' : 'JPS');
+        }
+        
+        setActiveTranslation(effectiveSlug);
+
+        // Optimization: prevent redundant fetching
+        if (dataRef.current.book === activeBook && 
+            dataRef.current.chapter === activeChapter && 
+            dataRef.current.slug === effectiveSlug && 
+            verses.length > 0) {
+          setIsLoading(false);
+          return;
+        }
+        
+        // 6. Fetch verses targeting only the validated translation slug
+        let versesQuery = supabase
             .from('reader_verses_view')
             .select('*')
             .eq('book_id', bookData.name_en)
             .eq('chapter_num', activeChapter)
-            .eq('translation_slug', translationSlug)
             .order('verse_num', { ascending: true });
+
+        // FIX: If a translation exists, filter by it. If NOT, filter for null so we still get the Hebrew/Greek verses!
+        if (availableTrans.length > 0) {
+            versesQuery = versesQuery.eq('translation_slug', effectiveSlug);
+        } else {
+            versesQuery = versesQuery.is('translation_slug', null);
+        }
+        
+        const { data: versesData } = await versesQuery;
         
         setVerses((versesData || []) as Verse[]);
-        dataRef.current = { book: activeBook, chapter: activeChapter, slug: translationSlug };
+        dataRef.current = { book: activeBook, chapter: activeChapter, slug: effectiveSlug };
       } catch (err: unknown) { 
         const errorMessage = err instanceof Error ? err.message : String(err);
         setFetchError(errorMessage); 
@@ -290,7 +344,7 @@ export const ReaderPage = ({ bookName, chapterNumber, initialVerses, initialHebr
     };
 
     if (activeBook) fetchVersesData();
-  }, [activeBook, activeChapter, verses.length, translationSlug]); 
+  }, [activeBook, activeChapter, verses.length, translation]); 
 
   return (
     <div className="flex h-screen bg-white dark:bg-slate-950 overflow-hidden text-slate-900 dark:text-slate-100 relative">
@@ -315,8 +369,9 @@ export const ReaderPage = ({ bookName, chapterNumber, initialVerses, initialHebr
             handlePrevChapter={() => activeChapter > 1 && router.push(`/read/${encodeURIComponent(activeBook)}/${activeChapter - 1}`)}
             handleNextChapter={() => router.push(`/read/${encodeURIComponent(activeBook)}/${activeChapter + 1}`)}
             languageMode={languageMode} setLanguageMode={handleSetLanguageMode}
-            translation={translation} 
+            translation={translation} // Passes the raw preference (e.g. 'default') so the menu checkmarks work correctly
             setTranslation={handleSetTranslation}
+            availableTranslations={availableTranslations}
             hebrewStyle={hebrewStyle} setHebrewStyle={handleSetHebrewStyle}
           />
           <div className="max-w-3xl mx-auto py-6 md:py-8 w-full flex-1 md:px-6">
@@ -335,7 +390,9 @@ export const ReaderPage = ({ bookName, chapterNumber, initialVerses, initialHebr
                   <VerseCard 
                     verse={v} 
                     active={(selectedVerse?.verse_id || selectedVerse?.id) === (v.verse_id || v.id)} 
-                    languageMode={languageMode} hebrewStyle={hebrewStyle} translation={translation} 
+                    languageMode={languageMode} 
+                    hebrewStyle={hebrewStyle} 
+                    translation={activeTranslation} // VerseCard still gets the resolved text (e.g. 'Modernized')
                     onClick={() => { setSelectedVerse(v); setIsInsightsOpen(true); }}
                     onWordClick={(w) => { setSelectedStrongs(w.strongs); setSelectedWordContext(w); }} 
                     groupId={activeGroupId}

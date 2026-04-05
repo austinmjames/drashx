@@ -8,7 +8,6 @@ import {
   MessageSquare
 } from 'lucide-react';
 import { ReaderSettingsMenu } from '../../../features/reader/reader-settings/ui/ReaderSettingsMenu';
-import { TranslationOption } from '../../../views/reader/ui/ReaderPage';
 
 interface ReaderHeaderProps {
   isSidebarOpen: boolean;
@@ -21,13 +20,14 @@ interface ReaderHeaderProps {
   handlePrevChapter: () => void;
   handleNextChapter: () => void;
   
-  // Settings State - Standardized to use TranslationOption union from ReaderPage
+  // Settings State - Dynamically driven by the database translation architecture
   languageMode: 'both' | 'en' | 'he';
   setLanguageMode: (mode: 'both' | 'en' | 'he') => void;
-  translation: TranslationOption;
-  setTranslation: (trans: TranslationOption) => void; 
+  translation: string;
+  setTranslation: (trans: string) => void; 
   hebrewStyle: 'niqqud' | 'no-niqqud';
   setHebrewStyle: (style: 'niqqud' | 'no-niqqud') => void;
+  availableTranslations: Array<{slug: string, name: string}>;
 }
 
 /**
@@ -42,6 +42,7 @@ export const ReaderHeader = ({
   handlePrevChapter, handleNextChapter,
   languageMode, setLanguageMode,
   translation, setTranslation,
+  availableTranslations,
   hebrewStyle, setHebrewStyle
 }: ReaderHeaderProps) => {
 
@@ -121,7 +122,8 @@ export const ReaderHeader = ({
       <div className="flex-1 flex justify-end items-center shrink-0 gap-1 md:gap-3">
         <ReaderSettingsMenu 
           languageMode={languageMode} setLanguageMode={setLanguageMode}
-          translation={translation} setTranslation={(trans) => setTranslation(trans as TranslationOption)}
+          translation={translation} setTranslation={setTranslation}
+          availableTranslations={availableTranslations}
           hebrewStyle={hebrewStyle} setHebrewStyle={setHebrewStyle}
         />
         

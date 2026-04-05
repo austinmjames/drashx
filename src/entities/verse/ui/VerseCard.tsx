@@ -165,8 +165,8 @@ export const VerseCard = ({
         </div>
       )}
 
-      {/* Read Status */}
-      {currentStatus === 'read' && (
+      {/* Commentary Exists Indicator (Read or Unread) */}
+      {currentStatus !== 'none' && (
         <div className={`absolute right-3 top-7 ${firstLineHeight} flex items-center transition-all duration-300 z-10`}>
           <div className="w-1.5 h-1.5 rounded-full bg-blue-400 dark:bg-blue-500/40 opacity-60" />
         </div>

@@ -29,47 +29,50 @@ export const useVerseReadStatus = (
     }
 
     try {
-      // 1. Fetch the user's read receipt
+      const stringVerseId = String(verseId);
+
+      // 1. Prepare queries for the read receipt AND comment existence
       let receiptQuery = supabase
         .from('verse_read_receipts')
         .select('last_read_at')
         .eq('user_id', userId)
-        .eq('verse_id', String(verseId));
+        .eq('verse_id', stringVerseId);
 
       if (groupId) receiptQuery = receiptQuery.eq('group_id', groupId);
       else receiptQuery = receiptQuery.is('group_id', null);
 
-      const { data: receipt, error: receiptErr } = await receiptQuery.maybeSingle();
-      if (receiptErr) throw receiptErr;
-      if (!isMounted.current) return;
-
-      const lastReadDate = receipt ? new Date(receipt.last_read_at) : new Date(0);
-
-      // 2. Check for ANY comments (including the user's own) to show the 'read' dot
       let anyCommentsQuery = supabase
         .from('comments')
         .select('id')
-        .eq('verse_id', String(verseId))
+        .eq('verse_id', stringVerseId)
         .limit(1);
       
       if (groupId) anyCommentsQuery = anyCommentsQuery.eq('group_id', groupId);
       else anyCommentsQuery = anyCommentsQuery.is('group_id', null);
 
-      const { data: anyComments, error: anyCommentsErr } = await anyCommentsQuery;
-      if (anyCommentsErr) throw anyCommentsErr;
+      // PERFORMANCE BOOST: Run receipt fetch and existence check concurrently
+      const [receiptRes, anyCommentsRes] = await Promise.all([
+        receiptQuery.maybeSingle(),
+        anyCommentsQuery
+      ]);
+
+      if (receiptRes.error) throw receiptRes.error;
+      if (anyCommentsRes.error) throw anyCommentsRes.error;
       if (!isMounted.current) return;
-      
-      // If no comments at all exist, hide the dot
-      if (!anyComments || anyComments.length === 0) {
+
+      // 2. If no comments at all exist, hide the dot entirely and skip step 3
+      if (!anyCommentsRes.data || anyCommentsRes.data.length === 0) {
         setStatus('none');
         return;
       }
+
+      const lastReadDate = receiptRes.data ? new Date(receiptRes.data.last_read_at) : new Date(0);
 
       // 3. Check for UNREAD comments specifically by OTHER users
       let unreadQuery = supabase
         .from('comments')
         .select('id')
-        .eq('verse_id', String(verseId))
+        .eq('verse_id', stringVerseId)
         .neq('user_id', userId) // Prevent the user's own comments from triggering 'unread'
         .gt('created_at', lastReadDate.toISOString())
         .limit(1);
@@ -91,8 +94,8 @@ export const useVerseReadStatus = (
       const errorMsg = err instanceof Error ? err.message : String(errorObj?.message || err);
       
       // Catch Supabase Auth GoTrue lock contention errors caused by massive concurrent fetching
-      if (errorMsg.includes('AbortError') || errorMsg.includes('Lock broken') || errorMsg.includes('fetch')) {
-        if (retryCount < 3 && isMounted.current) {
+      if ((errorMsg.includes('AbortError') || errorMsg.includes('Lock broken') || errorMsg.includes('fetch')) && retryCount < 3) {
+        if (isMounted.current) {
           // Exponential backoff with jitter
           const delay = Math.pow(2, retryCount) * 500 + Math.random() * 1000;
           setTimeout(() => {
@@ -122,19 +125,24 @@ export const useVerseReadStatus = (
 
     const channel = supabase.channel(`verse-comments-${verseId}`)
       .on('postgres_changes', {
-        event: 'INSERT',
+        event: '*', // FIX: Listen to all events to catch DELETE operations
         schema: 'public',
         table: 'comments',
         filter: `verse_id=eq.${verseId}`
       }, (payload) => {
         if (!isMounted.current) return;
         
-        // Only trigger 'unread' if the new comment is from someone else
-        if (payload.new.user_id !== userId) {
-          setStatus('unread');
-        } else {
-          // If we wrote a comment, and the status was 'none', it should now be 'read'
-          setStatus(prev => prev === 'none' ? 'read' : prev);
+        if (payload.eventType === 'DELETE') {
+          // If a comment is deleted, re-evaluate to see if it was the last one
+          fetchStatus(0);
+        } else if (payload.eventType === 'INSERT') {
+          // Only trigger 'unread' if the new comment is from someone else
+          if (payload.new.user_id !== userId) {
+            setStatus('unread');
+          } else {
+            // If we wrote a comment, and the status was 'none', it should now be 'read'
+            setStatus(prev => prev === 'none' ? 'read' : prev);
+          }
         }
       })
       .subscribe();
@@ -142,7 +150,7 @@ export const useVerseReadStatus = (
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [verseId, userId]);
+  }, [verseId, userId, fetchStatus]);
 
   const markAsRead = async () => {
     if (!verseId || !userId) return;
