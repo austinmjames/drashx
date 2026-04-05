@@ -50,7 +50,10 @@ export const ReferenceLink = ({
   const displayLabel = label || `${book} ${chapter}:${verse}`;
   const isRange = displayLabel.includes('-') || displayLabel.includes(',');
 
-  const checkAccess = useCallback(async (retryCount = 0): Promise<boolean> => {
+  /**
+   * Enhanced checkAccess to return collection info for the preview fetcher.
+   */
+  const checkAccess = useCallback(async (retryCount = 0): Promise<{ restricted: boolean; collection: string }> => {
     try {
       const { data: bookMeta } = await supabase
         .from('books')
@@ -63,7 +66,7 @@ export const ReferenceLink = ({
 
       if (collection === 'Tanakh') {
         setIsRestricted(false);
-        return false;
+        return { restricted: false, collection };
       }
 
       const { data: { user }, error: authError } = await supabase.auth.getUser();
@@ -71,7 +74,7 @@ export const ReferenceLink = ({
 
       if (!user) {
         setIsRestricted(true);
-        return true;
+        return { restricted: true, collection };
       }
 
       const { data: profile } = await supabase
@@ -82,7 +85,7 @@ export const ReferenceLink = ({
       
       const restricted = !profile?.enabled_collections?.includes(collection);
       setIsRestricted(restricted);
-      return restricted;
+      return { restricted, collection };
     } catch (err: unknown) {
       const errorMsg = err instanceof Error ? err.message : String(err);
       if ((errorMsg.includes('lock') || errorMsg.includes('stole')) && retryCount < 3) {
@@ -90,26 +93,49 @@ export const ReferenceLink = ({
         await new Promise(res => setTimeout(res, delay));
         return checkAccess(retryCount + 1);
       }
-      return false;
+      return { restricted: false, collection: 'Tanakh' };
     }
   }, [book]);
 
   const fetchPreview = useCallback(async () => {
     if (hidePreview || preview || loading) return;
     setLoading(true);
-    const restricted = await checkAccess();
+    
+    // 1. Check access and get the collection context
+    const { restricted, collection } = await checkAccess();
     if (restricted) { setLoading(false); return; }
 
+    // 2. Map collection to the primary translation slug for the preview
+    // Tanakh defaults to JPS, Christianity defaults to WEB
+    const slug = collection === 'Christianity' ? 'WEB' : 'JPS';
+
     try {
+      // FIX: Added .eq('translation_slug', slug) to ensure the view returns exactly one row.
+      // Without this filter, the new multi-translation architecture returns 0 rows or errors.
       const { data, error } = await supabase
         .from('reader_verses_view')
         .select('text_he, text_en')
         .eq('book_id', book)
         .eq('chapter_num', chapter)
         .eq('verse_num', verse)
+        .eq('translation_slug', slug)
         .single();
       
-      if (data && !error) setPreview({ he: data.text_he, en: data.text_en || '' });
+      if (data && !error) {
+        setPreview({ he: data.text_he, en: data.text_en || '' });
+      } else {
+        // Final fallback: try without a slug if the join failed (for newly added verses not yet in translation table)
+        const { data: fallback } = await supabase
+          .from('reader_verses_view')
+          .select('text_he, text_en')
+          .eq('book_id', book)
+          .eq('chapter_num', chapter)
+          .eq('verse_num', verse)
+          .limit(1)
+          .single();
+          
+        if (fallback) setPreview({ he: fallback.text_he, en: fallback.text_en || '' });
+      }
     } catch (e) {
       console.error("Preview fetch error", e);
     } finally {
@@ -147,24 +173,18 @@ export const ReferenceLink = ({
     const tooltipWidth = 320; 
     const padding = 16; 
 
-    // Horizontal Alignment
     const targetCenter = rect.left + (rect.width / 2);
     let tooltipLeft = targetCenter - (tooltipWidth / 2);
     
-    // Bounds Check: Prevent tooltip from bleeding off screen
     if (tooltipLeft < padding) tooltipLeft = padding;
     if (tooltipLeft > viewportWidth - tooltipWidth - padding) {
       tooltipLeft = viewportWidth - tooltipWidth - padding;
     }
 
-    // Dynamic Arrow Positioning: The "^" follows the center of the trigger button
     let cssArrowLeft = targetCenter - tooltipLeft;
-    
-    // Clamp arrow so it doesn't break out of the bubble's rounded corners
     if (cssArrowLeft < 24) cssArrowLeft = 24;
     if (cssArrowLeft > tooltipWidth - 24) cssArrowLeft = tooltipWidth - 24;
 
-    // Vertical Flipping (Viewport Aware)
     const estimatedHeight = isRestricted ? 220 : 340; 
     const spaceAbove = rect.top;
     const spaceBelow = viewportHeight - rect.bottom;
@@ -189,7 +209,6 @@ export const ReferenceLink = ({
     onClick(book, chapter, verse);
   };
 
-  // Determine if the preview text is Greek so we can properly set text alignment and direction
   const isGreek = useMemo(() => {
     if (!preview?.he) return false;
     return /[\u0370-\u03FF\u1F00-\u1FFF]/.test(preview.he);
@@ -226,20 +245,17 @@ export const ReferenceLink = ({
 
       {typeof document !== 'undefined' && createPortal(
         <div 
-          className="fixed z-[9999] pointer-events-none duration-200 ease-out"
+          className="fixed z-9999 pointer-events-none duration-200 ease-out"
           style={{ 
             top: tooltipStyle.top, 
             left: tooltipStyle.left, 
             opacity: tooltipStyle.opacity,
-            // Only translate Y upward when placement is 'top' to prevent clipping 
             transform: `${tooltipStyle.placement === 'top' ? 'translateY(-100%) ' : ''}scale(${tooltipStyle.scale})`,
             transformOrigin: tooltipStyle.placement === 'top' ? 'bottom center' : 'top center',
-            // Animate only opacity and scale. transition-all caused the "fly-in" from 0,0.
             transitionProperty: 'opacity, transform',
             visibility: isHovered ? 'visible' : 'hidden'
           }}
         >
-          {/* Main Bubble Container */}
           <div className="relative bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 p-5 w-[320px] flex flex-col gap-3 text-left pointer-events-auto shadow-[0_20px_50px_rgba(0,0,0,0.15)] dark:shadow-[0_20px_50px_rgba(0,0,0,0.4)]">
             
             {isRestricted ? (
@@ -288,13 +304,12 @@ export const ReferenceLink = ({
               </>
             )}
 
-            {/* The Dynamic Arrow ("^") */}
             <div 
               className={`absolute w-3 h-3 bg-white dark:bg-slate-900 rotate-45 border-slate-200 dark:border-slate-800 ${arrowPlacementClasses}`}
               style={{ 
                 left: tooltipStyle.arrowLeft, 
                 transform: 'translateX(-50%) rotate(45deg)',
-                zIndex: -1 // Sits behind the bubble background but above the page due to the portal's context
+                zIndex: -1 
               }}
             />
           </div>

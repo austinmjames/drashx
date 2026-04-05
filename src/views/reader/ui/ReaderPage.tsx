@@ -1,7 +1,7 @@
 // Path: src/views/reader/ui/ReaderPage.tsx
 "use client";
 
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { useRouter, useParams, useSearchParams } from 'next/navigation';
 import { User as SupabaseUser } from '@supabase/supabase-js';
 import dynamic from 'next/dynamic';
@@ -29,7 +29,7 @@ const ProfileSettings = dynamic(() =>
 let globalIsSidebarOpen = true;
 
 // --- Types ---
-export type TranslationOption = 'default' | 'jps1917' | 'modernized' | 'web';
+export type TranslationOption = 'default' | 'jps1917' | 'modernized' | 'web' | 'tbv';
 
 interface Group { id: string; name: string; icon_url?: string; color_theme?: string; }
 interface GroupMemberJoin { group_id: string; groups: Group | Group[]; }
@@ -44,7 +44,7 @@ interface ProfilePreferences {
 
 const VerseSkeleton = () => (
   <div className="p-6 border-b border-slate-100 dark:border-slate-800 animate-pulse space-y-6">
-    <div className="flex gap-6 items-start" dir="rtl"><div className="w-8 h-6 bg-slate-100 dark:bg-slate-800 rounded mt-1" /><div className="flex-1 space-y-3"><div className="h-8 bg-slate-100 dark:bg-slate-800 rounded w-full ml-auto" /><div className="h-8 bg-slate-100 dark:bg-slate-800 rounded w-5/6 ml-auto" /></div></div>
+    <div className="flex gap-6 items-start" dir="rtl"><div className="w-8 h-6 bg-slate-100 dark:border-slate-800 rounded mt-1" /><div className="flex-1 space-y-3"><div className="h-8 bg-slate-100 dark:border-slate-800 rounded w-full ml-auto" /><div className="h-8 bg-slate-100 dark:border-slate-800 rounded w-5/6 ml-auto" /></div></div>
     <div className="flex gap-6 items-start" dir="ltr"><div className="w-8 h-4 bg-slate-50 dark:bg-slate-900 rounded mt-1.5" /><div className="flex-1 space-y-2"><div className="h-5 bg-slate-50 dark:bg-slate-900 rounded w-full" /><div className="h-5 bg-slate-50 dark:bg-slate-900 rounded w-2/3" /></div></div>
   </div>
 );
@@ -77,7 +77,19 @@ export const ReaderPage = ({ bookName, chapterNumber, initialVerses, initialHebr
   const [activeGroupId, setActiveGroupId] = useState<string | null>(null);
   const [myGroups, setMyGroups] = useState<Group[]>([]);
 
-  const activeBook = (params?.book as string) || String(bookName || 'Genesis');
+  // FIX: Properly case the book name (e.g. "genesis" -> "Genesis") for display in Header and SEO
+  const activeBook = useMemo(() => {
+    const rawName = (params?.book as string) || String(bookName || 'Genesis');
+    return decodeURIComponent(rawName)
+      .split(' ')
+      .map(word => {
+        const lower = word.toLowerCase();
+        if (['i', 'ii', 'iii'].includes(lower)) return word.toUpperCase();
+        return word.charAt(0).toUpperCase() + word.slice(1).toLowerCase();
+      })
+      .join(' ');
+  }, [params?.book, bookName]);
+
   const activeChapter = Number(params?.chapter ?? chapterNumber ?? 1);
 
   // --- State Initialization with Props (SSR Optimization) ---
@@ -89,7 +101,22 @@ export const ReaderPage = ({ bookName, chapterNumber, initialVerses, initialHebr
   const [selectedStrongs, setSelectedStrongs] = useState<string | null>(null);
   const [selectedWordContext, setSelectedWordContext] = useState<VerseWord | null>(null);
 
-  const dataRef = useRef({ book: activeBook, chapter: activeChapter });
+  /**
+   * FIX: Map UI translation options to Database Slugs.
+   * This is critical to prevent "2 of every verse" errors by ensuring
+   * the query always filters for a single specific translation record.
+   */
+  const translationSlug = useMemo(() => {
+    switch (translation) {
+      case 'modernized': return 'Modernized';
+      case 'web': return 'WEB';
+      case 'tbv': return 'TBV';
+      default: return 'JPS'; // Default/JPS1917 maps to 'JPS'
+    }
+  }, [translation]);
+
+  // Track the last loaded state to prevent redundant fetches
+  const dataRef = useRef({ book: activeBook, chapter: activeChapter, slug: translationSlug });
 
   // --- Navigation Support: Scrolling Logic ---
   const scrollToVerse = useCallback((vNum: number) => {
@@ -225,9 +252,11 @@ export const ReaderPage = ({ bookName, chapterNumber, initialVerses, initialHebr
   // --- Data Fetching Effect (Backup + Client-Side Navigation) ---
   useEffect(() => {
     const fetchVersesData = async () => {
-      const cleanBookName = activeBook && activeBook !== 'undefined' ? decodeURIComponent(activeBook).trim() : '';
-      
-      if (dataRef.current.book === cleanBookName && dataRef.current.chapter === activeChapter && verses.length > 0) {
+      // Logic Fix: Only skip fetch if book, chapter, AND translation slug match the currently displayed data
+      if (dataRef.current.book === activeBook && 
+          dataRef.current.chapter === activeChapter && 
+          dataRef.current.slug === translationSlug &&
+          verses.length > 0) {
         return;
       }
 
@@ -235,14 +264,23 @@ export const ReaderPage = ({ bookName, chapterNumber, initialVerses, initialHebr
       setFetchError(null);
       
       try {
-        const { data: bookData } = await supabase.from('books').select('*').ilike('name_en', cleanBookName).single();
-        if (!bookData) throw new Error(`Book "${cleanBookName}" not found.`);
+        const { data: bookData } = await supabase.from('books').select('*').ilike('name_en', activeBook).single();
+        if (!bookData) throw new Error(`Book "${activeBook}" not found.`);
         setHebrewTitle(bookData.name_he);
         
-        const { data: versesData } = await supabase.from('reader_verses_view').select('*').eq('book_id', bookData.name_en).eq('chapter_num', activeChapter).order('verse_num', { ascending: true });
+        // FIX: Applied .eq('translation_slug', translationSlug) to the client-side fetch.
+        // This ensures that when the page hydrates or navigates, it only pulls one translation
+        // per verse, resolving the "double verse" display issue.
+        const { data: versesData } = await supabase
+            .from('reader_verses_view')
+            .select('*')
+            .eq('book_id', bookData.name_en)
+            .eq('chapter_num', activeChapter)
+            .eq('translation_slug', translationSlug)
+            .order('verse_num', { ascending: true });
         
         setVerses((versesData || []) as Verse[]);
-        dataRef.current = { book: cleanBookName, chapter: activeChapter };
+        dataRef.current = { book: activeBook, chapter: activeChapter, slug: translationSlug };
       } catch (err: unknown) { 
         const errorMessage = err instanceof Error ? err.message : String(err);
         setFetchError(errorMessage); 
@@ -252,7 +290,7 @@ export const ReaderPage = ({ bookName, chapterNumber, initialVerses, initialHebr
     };
 
     if (activeBook) fetchVersesData();
-  }, [activeBook, activeChapter, verses.length]); 
+  }, [activeBook, activeChapter, verses.length, translationSlug]); 
 
   return (
     <div className="flex h-screen bg-white dark:bg-slate-950 overflow-hidden text-slate-900 dark:text-slate-100 relative">
@@ -273,11 +311,10 @@ export const ReaderPage = ({ bookName, chapterNumber, initialVerses, initialHebr
           <ReaderHeader 
             isSidebarOpen={isSidebarOpen} toggleSidebar={() => setIsSidebarOpen(!isSidebarOpen)}
             isInsightsOpen={isInsightsOpen} toggleInsights={() => setIsInsightsOpen(!isInsightsOpen)}
-            activeBook={decodeURIComponent(activeBook)} activeChapter={activeChapter} hebrewTitle={hebrewTitle}
+            activeBook={activeBook} activeChapter={activeChapter} hebrewTitle={hebrewTitle}
             handlePrevChapter={() => activeChapter > 1 && router.push(`/read/${encodeURIComponent(activeBook)}/${activeChapter - 1}`)}
             handleNextChapter={() => router.push(`/read/${encodeURIComponent(activeBook)}/${activeChapter + 1}`)}
             languageMode={languageMode} setLanguageMode={handleSetLanguageMode}
-            // Removed restricted narrow casting to ensure full compatibility with the updated ReaderHeader union types
             translation={translation} 
             setTranslation={handleSetTranslation}
             hebrewStyle={hebrewStyle} setHebrewStyle={handleSetHebrewStyle}

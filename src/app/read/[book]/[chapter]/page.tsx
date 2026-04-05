@@ -37,7 +37,6 @@ export default async function ReadChapterRoute(props: PageProps) {
   const chapterNum = parseInt(chapter, 10);
 
   // 2. Fetch Book Metadata (Hebrew Title) on the Server
-  // Using .ilike for case-insensitive matching
   const { data: bookData, error: bookError } = await supabase
     .from('books')
     .select('*')
@@ -51,12 +50,30 @@ export default async function ReadChapterRoute(props: PageProps) {
   }
 
   // 3. Fetch Verses for initial render on the Server
-  const { data: versesData } = await supabase
-    .from('reader_verses_view')
-    .select('*')
-    .eq('book_id', bookData.name_en)
-    .eq('chapter_num', chapterNum)
-    .order('verse_num', { ascending: true });
+  let versesData = null;
+  let retryCount = 0;
+
+  while (retryCount < 3) {
+    const { data, error } = await supabase
+      .from('reader_verses_view')
+      .select('*')
+      .eq('book_id', bookData.name_en)
+      .eq('chapter_num', chapterNum)
+      .eq('translation_slug', 'JPS') // Filter for the primary translation
+      .order('verse_num', { ascending: true });
+
+    if (!error) {
+      versesData = data;
+      break;
+    }
+
+    // Diagnostic log: Helps identify if the View is missing columns
+    console.error(`Verse fetch error (Attempt ${retryCount + 1}):`, error.message);
+    
+    // If we hit a lock error, wait briefly and retry
+    retryCount++;
+    await new Promise(res => setTimeout(res, 300 * retryCount));
+  }
 
   // 4. Pass the fetched data as "initial" props to the Client Component
   return (
