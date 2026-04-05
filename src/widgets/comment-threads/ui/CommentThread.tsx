@@ -9,6 +9,7 @@ interface Profile {
   username: string;
   display_name?: string;
   avatar_url?: string;
+  scholarly_score?: number;
 }
 
 interface ThreadComment extends Omit<Comment, 'profiles'> {
@@ -33,7 +34,7 @@ type FetchedComment = Comment & {
 };
 
 interface CommentThreadProps {
-  verseId: string | number;
+  verseId: string; // Strictly UUID string
   groupId?: string; 
   referenceLabel?: string; 
   currentUserId?: string; 
@@ -66,8 +67,14 @@ export const CommentThread = ({ verseId, groupId, referenceLabel, currentUserId:
   // 2. Fetch Read Receipt for Unread Status
   useEffect(() => {
     const fetchReadReceipt = async () => {
-      if (!currentUserId) return;
-      let query = supabase.from('verse_read_receipts').select('last_read_at').eq('user_id', currentUserId).eq('verse_id', String(verseId));
+      if (!currentUserId || !verseId) return;
+      
+      let query = supabase
+        .from('verse_read_receipts')
+        .select('last_read_at')
+        .eq('user_id', currentUserId)
+        .eq('verse_id', verseId);
+
       if (groupId) query = query.eq('group_id', groupId);
       else query = query.is('group_id', null);
 
@@ -80,18 +87,15 @@ export const CommentThread = ({ verseId, groupId, referenceLabel, currentUserId:
 
   // 3. Fetch Full Thread Data (Including Bookmarks)
   const fetchThread = useCallback(async (showLoading = true) => {
-    if (verseId === undefined || verseId === null) return; 
+    if (!verseId || !currentUserId) return; 
     
     if (showLoading) {
       setLoading(true);
       setComments([]); 
     }
     
-    const numericVerseId = typeof verseId === 'string' ? parseInt(verseId, 10) : verseId;
-
     let fetchedComments: FetchedComment[] = [];
 
-    // FIX: Removed strict foreign key hints (!comment_id, !group_id) that cause silent PostgREST crashes
     const selectQuery = `
       *,
       profiles:profiles!user_id ( username, display_name, avatar_url, scholarly_score ),
@@ -100,7 +104,6 @@ export const CommentThread = ({ verseId, groupId, referenceLabel, currentUserId:
       group:groups ( name )
     `;
 
-    // The !inner hint on bookmarks is safe and required to filter the parent query by the joined table
     const bookmarkedQuery = `
       *,
       profiles:profiles!user_id ( username, display_name, avatar_url, scholarly_score ),
@@ -111,34 +114,24 @@ export const CommentThread = ({ verseId, groupId, referenceLabel, currentUserId:
 
     try {
       if (isPersonal) {
-        // Fetch User's standard personal comments + ANY bookmarked comments from groups for this verse
+        // Fetch User's personal comments + any comments they bookmarked from other groups for this verse
         const [personalRes, bookmarkedRes] = await Promise.all([
           supabase.from('comments')
             .select(selectQuery)
-            .eq('verse_id', numericVerseId)
+            .eq('verse_id', verseId)
             .is('group_id', null)
             .eq('user_id', currentUserId)
             .order('created_at', { ascending: true }),
           supabase.from('comments')
             .select(bookmarkedQuery)
-            .eq('verse_id', numericVerseId)
+            .eq('verse_id', verseId)
             .eq('bookmarks.user_id', currentUserId)
             .order('created_at', { ascending: true })
         ]);
 
-        if (personalRes.error) {
-          console.error("Error fetching personal comments:", personalRes.error.message, personalRes.error.details, personalRes.error.hint, personalRes.error);
-        } else if (personalRes.data) {
-          fetchedComments.push(...(personalRes.data as unknown as FetchedComment[]));
-        }
+        if (personalRes.data) fetchedComments.push(...(personalRes.data as unknown as FetchedComment[]));
+        if (bookmarkedRes.data) fetchedComments.push(...(bookmarkedRes.data as unknown as FetchedComment[]));
 
-        if (bookmarkedRes.error) {
-          console.error("Error fetching bookmarked comments:", bookmarkedRes.error.message, bookmarkedRes.error.details, bookmarkedRes.error.hint, bookmarkedRes.error);
-        } else if (bookmarkedRes.data) {
-          fetchedComments.push(...(bookmarkedRes.data as unknown as FetchedComment[]));
-        }
-
-        // Deduplicate just in case a user bookmarked their own personal comment
         const seen = new Set();
         fetchedComments = fetchedComments.filter(c => {
           if (seen.has(c.id)) return false;
@@ -147,21 +140,17 @@ export const CommentThread = ({ verseId, groupId, referenceLabel, currentUserId:
         });
 
       } else {
-        // Group view: Fetch just the group's comments normally
+        // Group view: Fetch group comments
         const { data, error } = await supabase.from('comments')
           .select(selectQuery)
-          .eq('verse_id', numericVerseId)
+          .eq('verse_id', verseId)
           .eq('group_id', groupId)
           .order('created_at', { ascending: true });
           
-        if (error) {
-          console.error("Error fetching group comments:", error.message, error.details, error.hint, error);
-        } else if (data) {
-          fetchedComments = data as unknown as FetchedComment[];
-        }
+        if (error) throw error;
+        if (data) fetchedComments = data as unknown as FetchedComment[];
       }
 
-      // Format data and calculate derived user fields
       const formattedComments = fetchedComments.map((c) => ({
         ...c,
         profiles: Array.isArray(c.profiles) ? c.profiles[0] : c.profiles,
@@ -173,27 +162,25 @@ export const CommentThread = ({ verseId, groupId, referenceLabel, currentUserId:
       
       setComments(formattedComments as unknown as ThreadComment[]);
     } catch (err) {
-      console.error("Fetch failed with exception:", err);
+      console.error("Comment fetch failed:", err);
       setComments([]);
+    } finally {
+      setLoading(false);
     }
-    
-    setLoading(false);
   }, [verseId, groupId, currentUserId, isPersonal]);
 
   // 4. Initialization & Realtime
   useEffect(() => {
-    if (verseId === undefined || verseId === null || !currentUserId) return;
+    if (!verseId || !currentUserId) return;
     
-    Promise.resolve().then(() => { fetchThread(true); });
+    fetchThread(true);
     
-    const numericVerseId = typeof verseId === 'string' ? parseInt(verseId, 10) : verseId;
-
-    const channel = supabase.channel(`verse-${numericVerseId}-${groupId || 'personal'}`)
+    const channel = supabase.channel(`verse-${verseId}-${groupId || 'personal'}`)
       .on('postgres_changes', { 
         event: '*', 
         schema: 'public', 
         table: 'comments', 
-        filter: `verse_id=eq.${numericVerseId}` 
+        filter: `verse_id=eq.${verseId}` 
       }, () => fetchThread(false)) 
       .subscribe();
 
@@ -204,7 +191,7 @@ export const CommentThread = ({ verseId, groupId, referenceLabel, currentUserId:
     if (!currentUserId || !verseId) return;
     await supabase.rpc('mark_verse_as_read', {
       p_user_id: currentUserId,
-      p_verse_id: String(verseId),
+      p_verse_id: verseId,
       p_group_id: groupId || null
     });
   };
@@ -220,11 +207,10 @@ export const CommentThread = ({ verseId, groupId, referenceLabel, currentUserId:
       fetchThread(false);
     } catch (err) {
       console.error("Failed to toggle bookmark:", err);
-      fetchThread(false); // Refetch to sync state
     }
   };
 
-  // 5. Compute Thread Stats & Sort Top-Level Roots
+  // 5. Threading Logic
   const { rootComments, enrichedComments } = useMemo(() => {
     const getDescendants = (parentId: string): ThreadComment[] => {
       const children = comments.filter(c => c.parent_id === parentId);
@@ -252,7 +238,6 @@ export const CommentThread = ({ verseId, groupId, referenceLabel, currentUserId:
       };
     });
 
-    // If a user bookmarked a nested reply but not its parent, it automatically gets promoted to a Root comment in their personal view so it's not orphaned.
     const roots = enriched.filter(c => c.parent_id === null || !enriched.some(p => p.id === c.parent_id)).sort((a, b) => {
       const aIsUnread = a.isNew || a.hasNewReplies;
       const bIsUnread = b.isNew || b.hasNewReplies;
@@ -281,9 +266,7 @@ export const CommentThread = ({ verseId, groupId, referenceLabel, currentUserId:
     return { rootComments: roots, enrichedComments: enriched };
   }, [comments, lastReadAt, sortOption, currentUserId]);
 
-  // 6. Recursive Tree Rendering
   const renderTree = (parentId: string | null = null, depth: number = 0) => {
-    // Top level roots includes orphaned bookmarked nested items automatically
     const children = parentId === null 
       ? rootComments 
       : enrichedComments.filter(c => c.parent_id === parentId);
@@ -402,7 +385,7 @@ export const CommentThread = ({ verseId, groupId, referenceLabel, currentUserId:
     );
   };
 
-  if (verseId === undefined || verseId === null) return null;
+  if (!verseId) return null;
 
   if (loading) {
     return (

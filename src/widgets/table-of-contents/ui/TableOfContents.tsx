@@ -17,11 +17,12 @@ import { ChapterGrid } from './ChapterGrid';
  * Shared Types for the TOC Module
  */
 export type Chapter = { chapter_number: number };
-export type BookType = { id: number; name_en: string; category: string; collection: string; chapters: Chapter[] };
+// FIX: Changed id type from number to string to support the new UUID primary keys
+export type BookType = { id: string; name_en: string; category: string; collection: string; chapters: Chapter[] };
 export type ViewMode = 'collections' | 'categories' | 'books' | 'chapters';
 
 interface RawBookResponse {
-  id: number;
+  id: string; // FIX: UUID support
   name_en: string;
   category: string;
   collection?: string | null; 
@@ -34,6 +35,8 @@ interface TableOfContentsProps {
 }
 
 let cachedBooks: BookType[] | null = null;
+
+// The UI category order logic remains the same
 export const CATEGORY_ORDER = [
   'Torah', "Nevi'im", 'Ketuvim', 
   'Gospels', 'History', 'Pauline Epistles', 'General Epistles', 'Prophecy', 'Apocalyptic'
@@ -64,16 +67,18 @@ export const TableOfContents = ({ userId, groupId }: TableOfContentsProps) => {
     const fetchAndSync = async () => {
       let dataToSync = cachedBooks;
       if (!cachedBooks) {
+        // FIX: Replaced .order('id') with .order('order_id') to utilize our new canonical sorting
         const { data, error: fetchErr } = await supabase
           .from('books')
           .select(`id, name_en, category, chapters ( chapter_number )`)
-          .order('id', { ascending: true });
+          .order('order_id', { ascending: true });
         
         if (fetchErr) {
           console.error("Failed to load library structure:", fetchErr);
           return;
         }
 
+        // Fetch collection info separately to avoid heavy join on initial list
         const { data: collectionData } = await supabase.from('books').select('id, collection');
 
         if (data) {
@@ -82,14 +87,17 @@ export const TableOfContents = ({ userId, groupId }: TableOfContentsProps) => {
             return {
               ...b,
               collection: colInfo?.collection || 'Tanakh',
+              // Ensure chapters within the book are sorted numerically for the grid
               chapters: b.chapters.sort((a, c) => a.chapter_number - c.chapter_number)
             };
           }) as BookType[];
+          
           cachedBooks = dataToSync;
           setBooks(dataToSync);
         }
       }
 
+      // Handle direct URL navigation (e.g. landing on /read/Genesis/1)
       if (dataToSync && currentBookName) {
         const foundBook = dataToSync.find(b => b.name_en.toLowerCase() === currentBookName.toLowerCase());
         if (foundBook) {
@@ -103,7 +111,7 @@ export const TableOfContents = ({ userId, groupId }: TableOfContentsProps) => {
     fetchAndSync();
   }, [currentBookName]);
 
-  // --- Fetch User Preferences with Retry for Auth Lock ---
+  // --- Fetch User Preferences ---
   const fetchPrefs = useCallback(async (retryCount = 0) => {
     if (!userId) {
       setEnabledCollections(['Tanakh']);
@@ -129,7 +137,7 @@ export const TableOfContents = ({ userId, groupId }: TableOfContentsProps) => {
       
       if (!isEnabled) {
         setEnabledCollections(['Tanakh']);
-        setViewMode('categories');
+        if (viewMode === 'collections') setViewMode('categories');
       } else {
         setEnabledCollections(collections);
         if (collections.length > 1 && !currentBookName && viewMode === 'categories') {
@@ -137,12 +145,10 @@ export const TableOfContents = ({ userId, groupId }: TableOfContentsProps) => {
         }
       }
     } catch (err: unknown) {
-      // Improved Error Analysis: Handle the empty object and the Lock Stolen error specifically
       const errorMsg = err instanceof Error ? err.message : JSON.stringify(err);
       const isLockError = errorMsg.includes('lock') || errorMsg.includes('stole') || errorMsg === '{}';
 
       if (isLockError && retryCount < 3) {
-        // Randomized jitter to stagger retries across components
         const delay = Math.pow(2, retryCount) * 400 + Math.random() * 400;
         setTimeout(() => fetchPrefs(retryCount + 1), delay);
         return;
@@ -159,37 +165,49 @@ export const TableOfContents = ({ userId, groupId }: TableOfContentsProps) => {
   // --- Unread Notification Logic ---
   const fetchUnread = useCallback(async () => {
     if (!userId) return;
-    const { data, error: rpcErr } = await supabase.rpc('get_unread_chapters', { p_user_id: userId, p_group_id: groupId || null });
+    const { data, error: rpcErr } = await supabase.rpc('get_unread_chapters', { 
+      p_user_id: userId, 
+      p_group_id: groupId || null 
+    });
+    
     if (data && !rpcErr) {
       const chapSet = new Set<string>();
       const bookSet = new Set<string>();
+      
       data.forEach((row: { book_name: string, chapter_number: number }) => {
         chapSet.add(`${row.book_name}-${row.chapter_number}`);
         bookSet.add(row.book_name);
       });
+      
       setUnreadChapters(chapSet);
       setUnreadBooks(bookSet);
       
       const catSet = new Set<string>();
       const colSet = new Set<string>();
+      
       books.forEach(b => { 
         if (bookSet.has(b.name_en)) {
           catSet.add(b.category); 
           colSet.add(b.collection || 'Tanakh');
         }
       });
+      
       setUnreadCategories(catSet);
       setUnreadCollections(colSet);
     }
   }, [userId, groupId, books]);
 
   useEffect(() => {
-    Promise.resolve().then(() => fetchUnread());
+    fetchUnread();
     
     if (!userId) return;
     const receiptChannel = supabase.channel(`toc-receipts-${userId}`).on('postgres_changes', { event: '*', schema: 'public', table: 'verse_read_receipts', filter: `user_id=eq.${userId}` }, fetchUnread).subscribe();
     const commentsChannel = supabase.channel(`toc-comments-${groupId || 'personal'}`).on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'comments', filter: groupId ? `group_id=eq.${groupId}` : 'group_id=is.null' }, fetchUnread).subscribe();
-    return () => { supabase.removeChannel(receiptChannel); supabase.removeChannel(commentsChannel); };
+    
+    return () => { 
+      supabase.removeChannel(receiptChannel); 
+      supabase.removeChannel(commentsChannel); 
+    };
   }, [userId, groupId, fetchUnread]);
 
   // --- Handlers ---
@@ -215,7 +233,10 @@ export const TableOfContents = ({ userId, groupId }: TableOfContentsProps) => {
   };
 
   // --- Derived ---
-  const collectionBooks = useMemo(() => books.filter(b => (b.collection || 'Tanakh') === activeCollection), [books, activeCollection]);
+  const collectionBooks = useMemo(() => 
+    books.filter(b => (b.collection || 'Tanakh') === activeCollection), 
+    [books, activeCollection]
+  );
   
   return (
     <div className="h-full flex flex-col bg-white dark:bg-slate-950 border-r border-slate-200 dark:border-slate-800">
