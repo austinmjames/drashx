@@ -2,9 +2,10 @@
 
 /**
  * Standardizes common Bible book abbreviations and variations to the canonical names
- * used in your database (e.g., "Gen" -> "Genesis").
+ * used in your database (e.g., "Gen" -> "Genesis", "1 Sam" -> "I Samuel").
  */
 const bookMapping: Record<string, string> = {
+  // Tanakh / Old Testament
   "gen": "Genesis", "genesis": "Genesis",
   "ex": "Exodus", "exod": "Exodus", "exodus": "Exodus",
   "lev": "Leviticus", "levi": "Leviticus", "leviticus": "Leviticus",
@@ -13,10 +14,10 @@ const bookMapping: Record<string, string> = {
   "josh": "Joshua", "joshua": "Joshua",
   "judg": "Judges", "judges": "Judges",
   "ruth": "Ruth",
-  "1 sam": "1 Samuel", "i samuel": "1 Samuel", "1 samuel": "1 Samuel",
-  "2 sam": "2 Samuel", "ii samuel": "2 Samuel", "2 samuel": "2 Samuel",
-  "1 kings": "1 Kings", "i kings": "1 Kings",
-  "2 kings": "2 Kings", "ii kings": "2 Kings",
+  "1 sam": "I Samuel", "i samuel": "I Samuel", "1 samuel": "I Samuel",
+  "2 sam": "II Samuel", "ii samuel": "II Samuel", "2 samuel": "II Samuel",
+  "1 kings": "I Kings", "i kings": "I Kings", "1 kgs": "I Kings",
+  "2 kings": "II Kings", "ii kings": "II Kings", "2 kgs": "II Kings",
   "isa": "Isaiah", "isaiah": "Isaiah",
   "jer": "Jeremiah", "jeremiah": "Jeremiah",
   "ezek": "Ezekiel", "ezekiel": "Ezekiel",
@@ -42,8 +43,37 @@ const bookMapping: Record<string, string> = {
   "dan": "Daniel", "daniel": "Daniel",
   "ezra": "Ezra",
   "neh": "Nehemiah", "nehemiah": "Nehemiah",
-  "1 chr": "1 Chronicles", "i chronicles": "1 Chronicles",
-  "2 chr": "2 Chronicles", "ii chronicles": "2 Chronicles",
+  "1 chr": "I Chronicles", "i chronicles": "I Chronicles", "1 chron": "I Chronicles",
+  "2 chr": "II Chronicles", "ii chronicles": "II Chronicles", "2 chron": "II Chronicles",
+
+  // Extended Library / New Testament
+  "mat": "Matthew", "matt": "Matthew", "matthew": "Matthew",
+  "mark": "Mark", "mrk": "Mark",
+  "luke": "Luke", "luk": "Luke",
+  "john": "John", "jhn": "John",
+  "acts": "Acts", "act": "Acts",
+  "rom": "Romans", "romans": "Romans",
+  "1 cor": "I Corinthians", "i corinthians": "I Corinthians", "1 corinthians": "I Corinthians", "1co": "I Corinthians",
+  "2 cor": "II Corinthians", "ii corinthians": "II Corinthians", "2 corinthians": "II Corinthians", "2co": "II Corinthians",
+  "gal": "Galatians", "galatians": "Galatians",
+  "eph": "Ephesians", "ephesians": "Ephesians",
+  "phil": "Philippians", "php": "Philippians", "philippians": "Philippians",
+  "col": "Colossians", "colossians": "Colossians",
+  "1 thess": "I Thessalonians", "i thessalonians": "I Thessalonians", "1 thessalonians": "I Thessalonians", "1th": "I Thessalonians",
+  "2 thess": "II Thessalonians", "ii thessalonians": "II Thessalonians", "2 thessalonians": "II Thessalonians", "2th": "II Thessalonians",
+  "1 tim": "I Timothy", "i timothy": "I Timothy", "1 timothy": "I Timothy", "1ti": "I Timothy",
+  "2 tim": "II Timothy", "ii timothy": "II Timothy", "2 timothy": "II Timothy", "2ti": "II Timothy",
+  "titus": "Titus", "tit": "Titus",
+  "philemon": "Philemon", "phm": "Philemon",
+  "hebrews": "Hebrews", "heb": "Hebrews",
+  "james": "James", "jas": "James",
+  "1 pet": "I Peter", "i peter": "I Peter", "1 peter": "I Peter", "1pe": "I Peter",
+  "2 pet": "II Peter", "ii peter": "II Peter", "2 peter": "II Peter", "2pe": "II Peter",
+  "1 john": "I John", "i john": "I John", "1 jhn": "I John", "1jo": "I John",
+  "2 john": "II John", "ii john": "II John", "2 jhn": "II John", "2jo": "II John",
+  "3 john": "III John", "iii john": "III John", "3 jhn": "III John", "3jo": "III John",
+  "jude": "Jude", "jud": "Jude",
+  "rev": "Revelation", "revelation": "Revelation"
 };
 
 /**
@@ -62,9 +92,10 @@ export interface ParsedReference {
  * - gen 1:1-19
  * - 2 Sam 2:1
  * - II Samuel 2:1-3
+ * - III John 1:1
  * - Psalms 23 (Chapter only)
  */
-const REF_REGEX = /(?:(?:I|II|1|2)\s+)?(?:[A-Za-z]+)\s+\d+(?::\d+(?:-\d+(?::\d+)?)?)?/g;
+const REF_REGEX = /(?:(?:I|II|III|1|2|3)\s+)?(?:[A-Za-z]+)\s+\d+(?::\d+(?:-\d+(?::\d+)?)?)?/gi;
 
 /**
  * Scans a string for Bible references and returns an array of matches with metadata.
@@ -81,7 +112,7 @@ export const parseReferences = (text: string): ParsedReference[] => {
     let bookKey = "";
     let startIndex = 0;
 
-    if (["1", "2", "i", "ii"].includes(parts[0])) {
+    if (["1", "2", "3", "i", "ii", "iii"].includes(parts[0])) {
       bookKey = `${parts[0]} ${parts[1]}`;
       startIndex = 2;
     } else {

@@ -1,7 +1,7 @@
 // Path: src/shared/ui/ReferenceLink.tsx
 "use client";
 
-import React, { useState, useCallback, useRef } from 'react';
+import React, { useState, useCallback, useRef, useMemo } from 'react';
 import { createPortal } from 'react-dom';
 import { BookOpen, Loader2, Lock, Sparkles, ExternalLink } from 'lucide-react';
 import { supabase } from '@/shared/api/supabase';
@@ -189,6 +189,12 @@ export const ReferenceLink = ({
     onClick(book, chapter, verse);
   };
 
+  // Determine if the preview text is Greek so we can properly set text alignment and direction
+  const isGreek = useMemo(() => {
+    if (!preview?.he) return false;
+    return /[\u0370-\u03FF\u1F00-\u1FFF]/.test(preview.he);
+  }, [preview?.he]);
+
   const arrowPlacementClasses = tooltipStyle.placement === 'top' 
     ? "-bottom-[6px] border-r border-b" 
     : "-top-[6px] border-l border-t";
@@ -220,7 +226,7 @@ export const ReferenceLink = ({
 
       {typeof document !== 'undefined' && createPortal(
         <div 
-          className="fixed z-9999 pointer-events-none duration-200 ease-out"
+          className="fixed z-[9999] pointer-events-none duration-200 ease-out"
           style={{ 
             top: tooltipStyle.top, 
             left: tooltipStyle.left, 
@@ -266,8 +272,15 @@ export const ReferenceLink = ({
                   </div>
                 ) : preview ? (
                   <div className="space-y-4">
-                    <p className="text-2xl font-serif text-slate-900 dark:text-slate-100 text-right leading-relaxed" dir="rtl">{preview.he}{isRange && " ..."}</p>
-                    <p className="text-sm text-slate-600 dark:text-slate-400 leading-relaxed italic border-l-2 border-slate-100 dark:border-slate-800 pl-3">{preview.en}{isRange && " ..."}</p>
+                    <p 
+                      className={`font-serif text-slate-900 dark:text-slate-100 leading-relaxed ${isGreek ? 'text-sm text-left' : 'text-xl text-right'}`} 
+                      dir={isGreek ? "ltr" : "rtl"}
+                    >
+                      {preview.he}{isRange && " ..."}
+                    </p>
+                    <p className="text-sm text-slate-600 dark:text-slate-400 leading-relaxed italic border-l-2 border-slate-100 dark:border-slate-800 pl-3">
+                      {preview.en}{isRange && " ..."}
+                    </p>
                   </div>
                 ) : (
                   <p className="text-xs text-slate-400 italic py-4">Preview unavailable.</p>
