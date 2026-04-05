@@ -17,12 +17,11 @@ import { ChapterGrid } from './ChapterGrid';
  * Shared Types for the TOC Module
  */
 export type Chapter = { chapter_number: number };
-// FIX: Changed id type from number to string to support the new UUID primary keys
 export type BookType = { id: string; name_en: string; category: string; collection: string; chapters: Chapter[] };
 export type ViewMode = 'collections' | 'categories' | 'books' | 'chapters';
 
 interface RawBookResponse {
-  id: string; // FIX: UUID support
+  id: string; 
   name_en: string;
   category: string;
   collection?: string | null; 
@@ -36,7 +35,6 @@ interface TableOfContentsProps {
 
 let cachedBooks: BookType[] | null = null;
 
-// The UI category order logic remains the same
 export const CATEGORY_ORDER = [
   'Torah', "Nevi'im", 'Ketuvim', 
   'Gospels', 'History', 'Pauline Epistles', 'General Epistles', 'Prophecy', 'Apocalyptic'
@@ -53,6 +51,11 @@ export const TableOfContents = ({ userId, groupId }: TableOfContentsProps) => {
   const [activeCategory, setActiveCategory] = useState<string | null>(null);
   const [activeBook, setActiveBook] = useState<BookType | null>(null);
   
+  // Track the last book we auto-synced to. This prevents the menu from 
+  // snapping back to the current chapter grid while the user is trying to 
+  // browse other collections or categories.
+  const [lastSyncedBook, setLastSyncedBook] = useState<string | null>(null);
+
   const [extendedLibraryEnabled, setExtendedLibraryEnabled] = useState(false);
   const [enabledCollections, setEnabledCollections] = useState<string[]>(['Tanakh']);
   const [activeCollection, setActiveCollection] = useState<string>('Tanakh');
@@ -67,7 +70,6 @@ export const TableOfContents = ({ userId, groupId }: TableOfContentsProps) => {
     const fetchAndSync = async () => {
       let dataToSync = cachedBooks;
       if (!cachedBooks) {
-        // FIX: Replaced .order('id') with .order('order_id') to utilize our new canonical sorting
         const { data, error: fetchErr } = await supabase
           .from('books')
           .select(`id, name_en, category, chapters ( chapter_number )`)
@@ -78,7 +80,6 @@ export const TableOfContents = ({ userId, groupId }: TableOfContentsProps) => {
           return;
         }
 
-        // Fetch collection info separately to avoid heavy join on initial list
         const { data: collectionData } = await supabase.from('books').select('id, collection');
 
         if (data) {
@@ -87,7 +88,6 @@ export const TableOfContents = ({ userId, groupId }: TableOfContentsProps) => {
             return {
               ...b,
               collection: colInfo?.collection || 'Tanakh',
-              // Ensure chapters within the book are sorted numerically for the grid
               chapters: b.chapters.sort((a, c) => a.chapter_number - c.chapter_number)
             };
           }) as BookType[];
@@ -97,19 +97,21 @@ export const TableOfContents = ({ userId, groupId }: TableOfContentsProps) => {
         }
       }
 
-      // Handle direct URL navigation (e.g. landing on /read/Genesis/1)
-      if (dataToSync && currentBookName) {
+      // Handle direct URL navigation and Initial Sync
+      // Only force the 'chapters' view if we haven't already synced to this book.
+      if (dataToSync && currentBookName && lastSyncedBook !== currentBookName) {
         const foundBook = dataToSync.find(b => b.name_en.toLowerCase() === currentBookName.toLowerCase());
         if (foundBook) {
           setActiveBook(foundBook);
           setActiveCategory(foundBook.category);
           setActiveCollection(foundBook.collection || 'Tanakh');
+          setLastSyncedBook(currentBookName);
           setViewMode('chapters');
         }
       }
     };
     fetchAndSync();
-  }, [currentBookName]);
+  }, [currentBookName, lastSyncedBook]);
 
   // --- Fetch User Preferences ---
   const fetchPrefs = useCallback(async (retryCount = 0) => {
@@ -140,20 +142,18 @@ export const TableOfContents = ({ userId, groupId }: TableOfContentsProps) => {
         if (viewMode === 'collections') setViewMode('categories');
       } else {
         setEnabledCollections(collections);
+        // Only jump to collections if we aren't currently viewing a book
         if (collections.length > 1 && !currentBookName && viewMode === 'categories') {
           setViewMode('collections');
         }
       }
     } catch (err: unknown) {
       const errorMsg = err instanceof Error ? err.message : JSON.stringify(err);
-      const isLockError = errorMsg.includes('lock') || errorMsg.includes('stole') || errorMsg === '{}';
-
-      if (isLockError && retryCount < 3) {
+      if ((errorMsg.includes('lock') || errorMsg.includes('stole')) && retryCount < 3) {
         const delay = Math.pow(2, retryCount) * 400 + Math.random() * 400;
         setTimeout(() => fetchPrefs(retryCount + 1), delay);
         return;
       }
-      
       console.error("Error fetching ToC preferences:", err);
     }
   }, [userId, currentBookName, viewMode]);
@@ -199,11 +199,9 @@ export const TableOfContents = ({ userId, groupId }: TableOfContentsProps) => {
 
   useEffect(() => {
     fetchUnread();
-    
     if (!userId) return;
     const receiptChannel = supabase.channel(`toc-receipts-${userId}`).on('postgres_changes', { event: '*', schema: 'public', table: 'verse_read_receipts', filter: `user_id=eq.${userId}` }, fetchUnread).subscribe();
     const commentsChannel = supabase.channel(`toc-comments-${groupId || 'personal'}`).on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'comments', filter: groupId ? `group_id=eq.${groupId}` : 'group_id=is.null' }, fetchUnread).subscribe();
-    
     return () => { 
       supabase.removeChannel(receiptChannel); 
       supabase.removeChannel(commentsChannel); 
@@ -232,14 +230,13 @@ export const TableOfContents = ({ userId, groupId }: TableOfContentsProps) => {
     else if (viewMode === 'categories' && extendedLibraryEnabled && enabledCollections.length > 1) setViewMode('collections');
   };
 
-  // --- Derived ---
   const collectionBooks = useMemo(() => 
     books.filter(b => (b.collection || 'Tanakh') === activeCollection), 
     [books, activeCollection]
   );
   
   return (
-    <div className="h-full flex flex-col bg-white dark:bg-slate-950 border-r border-slate-200 dark:border-slate-800">
+    <div className="h-full flex flex-col bg-white dark:bg-slate-950 border-r border-slate-200 dark:border-slate-800 select-none">
       <ToCHeader 
         viewMode={viewMode} 
         activeCollection={activeCollection}
@@ -250,7 +247,7 @@ export const TableOfContents = ({ userId, groupId }: TableOfContentsProps) => {
         onBack={handleBack}
       />
 
-      <div className="flex-1 overflow-y-auto p-4 scrollbar-hide">
+      <div className="flex-1 overflow-y-auto p-4 scrollbar-hide overscroll-contain">
         {viewMode === 'collections' && (
           <CollectionList 
             collections={enabledCollections} 
@@ -286,19 +283,21 @@ export const TableOfContents = ({ userId, groupId }: TableOfContentsProps) => {
         )}
 
         {viewMode === 'chapters' && activeBook && (
-          <ChapterGrid 
-            activeBook={activeBook}
-            currentBookName={currentBookName}
-            currentChapterNum={currentChapterNum}
-            unreadChapters={unreadChapters}
-            onChapterClick={(num) => {
-              if (unreadChapters.has(`${activeBook.name_en}-${num}`)) handleClearNotification('chapter', num);
-            }}
-          />
+          <div className="animate-in slide-in-from-right-4 duration-300">
+            <ChapterGrid 
+              activeBook={activeBook}
+              currentBookName={currentBookName}
+              currentChapterNum={currentChapterNum}
+              unreadChapters={unreadChapters}
+              onChapterClick={(num) => {
+                if (unreadChapters.has(`${activeBook.name_en}-${num}`)) handleClearNotification('chapter', num);
+              }}
+            />
+          </div>
         )}
       </div>
 
-      <footer className="flex-none p-6 text-center opacity-30">
+      <footer className="flex-none p-6 text-center opacity-30 bg-white/50 dark:bg-slate-950/50">
          <Book className="mx-auto mb-2 text-slate-400" size={16} />
          <p className="text-[10px] font-black uppercase tracking-[0.3em] text-slate-500">DrashX</p>
       </footer>

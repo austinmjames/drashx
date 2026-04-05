@@ -34,7 +34,7 @@ type FetchedComment = Comment & {
 };
 
 interface CommentThreadProps {
-  verseId: string; // Strictly UUID string
+  verseId: string; 
   groupId?: string; 
   referenceLabel?: string; 
   currentUserId?: string; 
@@ -85,7 +85,7 @@ export const CommentThread = ({ verseId, groupId, referenceLabel, currentUserId:
     fetchReadReceipt();
   }, [verseId, groupId, currentUserId]);
 
-  // 3. Fetch Full Thread Data (Including Bookmarks)
+  // 3. Fetch Full Thread Data (Restored explicit query variables for clarity)
   const fetchThread = useCallback(async (showLoading = true) => {
     if (!verseId || !currentUserId) return; 
     
@@ -169,7 +169,7 @@ export const CommentThread = ({ verseId, groupId, referenceLabel, currentUserId:
     }
   }, [verseId, groupId, currentUserId, isPersonal]);
 
-  // 4. Initialization & Realtime
+  // 4. Realtime Subscription
   useEffect(() => {
     if (!verseId || !currentUserId) return;
     
@@ -210,7 +210,7 @@ export const CommentThread = ({ verseId, groupId, referenceLabel, currentUserId:
     }
   };
 
-  // 5. Threading Logic
+  // 5. Threading & Sorting Logic
   const { rootComments, enrichedComments } = useMemo(() => {
     const getDescendants = (parentId: string): ThreadComment[] => {
       const children = comments.filter(c => c.parent_id === parentId);
@@ -266,6 +266,7 @@ export const CommentThread = ({ verseId, groupId, referenceLabel, currentUserId:
     return { rootComments: roots, enrichedComments: enriched };
   }, [comments, lastReadAt, sortOption, currentUserId]);
 
+  // 6. Tree Rendering Function
   const renderTree = (parentId: string | null = null, depth: number = 0) => {
     const children = parentId === null 
       ? rootComments 
@@ -278,7 +279,7 @@ export const CommentThread = ({ verseId, groupId, referenceLabel, currentUserId:
 
     if (visibleChildren.length === 0 && parentId !== null) return null;
 
-    const containerClass = parentId ? "mt-3 w-full min-w-0" : "space-y-6 pt-4 w-full min-w-0";
+    const containerClass = parentId ? "mt-4 w-full min-w-0" : "space-y-8 pt-4 w-full min-w-0";
 
     return (
       <div className={containerClass}>
@@ -291,7 +292,7 @@ export const CommentThread = ({ verseId, groupId, referenceLabel, currentUserId:
           
           if (editingId === comment.id) {
             return (
-              <div key={comment.id} className="my-4 p-2 bg-slate-50 dark:bg-slate-900 rounded-xl w-full min-w-0">
+              <div key={comment.id} className="my-4 p-4 bg-slate-50 dark:bg-slate-900/50 rounded-2xl border border-slate-100 dark:border-slate-800 animate-in fade-in zoom-in-95 duration-200">
                 <AddCommentForm 
                   verseId={verseId} 
                   groupId={comment.group_id} 
@@ -314,7 +315,7 @@ export const CommentThread = ({ verseId, groupId, referenceLabel, currentUserId:
           }
 
           return (
-            <div key={comment.id} className="flex flex-col mb-4 w-full min-w-0">
+            <div key={comment.id} className="flex flex-col mb-2 w-full min-w-0">
               <CommentItem 
                 comment={comment as unknown as Comment} 
                 currentUserId={currentUserId || undefined} 
@@ -363,9 +364,9 @@ export const CommentThread = ({ verseId, groupId, referenceLabel, currentUserId:
               />
               
               {(replyTo === comment.id || hasVisibleChildren) && (
-                <div className={depth < 2 ? "pl-3.5 ml-1 border-l border-slate-300 dark:border-slate-700 w-full min-w-0" : "mt-2 w-full min-w-0"}>
+                <div className={`${depth < 3 ? "pl-4 ml-2 border-l-2 border-slate-100 dark:border-slate-800/60" : "mt-2"} w-full min-w-0 transition-all duration-300`}>
                   {replyTo === comment.id && (
-                    <div className="mt-3 mb-4 px-1 w-full min-w-0">
+                    <div className="mt-4 mb-4 px-1 w-full min-w-0 animate-in slide-in-from-top-2 duration-300">
                       <AddCommentForm 
                         verseId={verseId} 
                         groupId={comment.group_id} 
@@ -389,13 +390,13 @@ export const CommentThread = ({ verseId, groupId, referenceLabel, currentUserId:
 
   if (loading) {
     return (
-      <div className="space-y-6 pt-4 px-2 w-full min-w-0 animate-in fade-in duration-300">
+      <div className="space-y-8 pt-6 px-4 w-full min-w-0 animate-in fade-in duration-300">
         {[1, 2, 3].map(i => (
-          <div key={i} className="flex gap-3 w-full min-w-0">
-            <div className="w-6 h-6 bg-slate-100 dark:bg-slate-800 rounded-full shrink-0 animate-pulse mt-1" />
-            <div className="flex-1 space-y-3 pt-1 min-w-0 w-full">
-              <div className="h-3 bg-slate-100 dark:bg-slate-800 rounded w-1/3 animate-pulse" />
-              <div className="h-16 bg-slate-50 dark:bg-slate-800/40 rounded-2xl w-full animate-pulse" />
+          <div key={i} className="flex gap-4 w-full min-w-0">
+            <div className="w-8 h-8 bg-slate-100 dark:bg-slate-800 rounded-full shrink-0 animate-pulse mt-1" />
+            <div className="flex-1 space-y-4 pt-1 min-w-0 w-full">
+              <div className="h-3 bg-slate-100 dark:bg-slate-800 rounded w-1/4 animate-pulse" />
+              <div className="h-20 bg-slate-50 dark:bg-slate-900/40 rounded-3xl w-full animate-pulse border border-slate-100 dark:border-slate-800" />
             </div>
           </div>
         ))}
@@ -404,33 +405,42 @@ export const CommentThread = ({ verseId, groupId, referenceLabel, currentUserId:
   }
 
   return (
-    <div className="pb-32 w-full min-w-0">
+    <div className="pb-36 w-full min-w-0 select-none overflow-x-hidden">
       {referenceLabel && (
-        <div className="sticky top-0 z-20 bg-slate-50/90 dark:bg-slate-900/90 backdrop-blur-sm py-4 border-b border-slate-200 dark:border-slate-800 mb-2 px-2 w-full min-w-0">
-          <h2 className="text-xs font-black uppercase tracking-widest text-indigo-500 truncate">{referenceLabel}</h2>
+        <div className="sticky top-0 z-40 bg-slate-50/90 dark:bg-slate-950/90 backdrop-blur-xl py-4 border-b border-slate-200/60 dark:border-slate-800/60 mb-2 px-6 w-full min-w-0 shadow-sm transition-all duration-300">
+          <h2 className="text-[11px] font-black uppercase tracking-[0.2em] text-indigo-600 dark:text-indigo-400 truncate drop-shadow-sm">
+            {referenceLabel}
+          </h2>
         </div>
       )}
       
-      {comments.length > 0 && (
-        <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-3 mt-4 mb-2 mx-2 w-full min-w-0">
-          <h3 className="text-[10px] font-black uppercase tracking-widest text-slate-400 shrink-0">
-            Discussions ({rootComments.length})
-          </h3>
-          {rootComments.length > 1 && (
-            <div className="shrink-0 max-w-[50%]">
-              <CommentSortSelect value={sortOption} onChange={setSortOption} />
-            </div>
-          )}
-        </div>
-      )}
+      <div className="px-6">
+        {comments.length > 0 && (
+          <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800/80 pb-3.5 mt-6 mb-4 w-full min-w-0">
+            <h3 className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-400 shrink-0">
+              Discussions ({rootComments.length})
+            </h3>
+            {rootComments.length > 1 && (
+              <div className="shrink-0">
+                <CommentSortSelect value={sortOption} onChange={setSortOption} />
+              </div>
+            )}
+          </div>
+        )}
 
-      {comments.length === 0 ? (
-        <div className="text-center py-12 px-4 bg-white/50 dark:bg-slate-900/20 rounded-2xl border border-dashed border-slate-200 dark:border-slate-800 mx-2 mt-4 w-full min-w-0">
-          <p className="text-slate-400 text-xs italic">No commentary yet. Be the first to share an insight.</p>
-        </div>
-      ) : (
-        renderTree(null, 0)
-      )}
+        {comments.length === 0 ? (
+          <div className="text-center py-20 px-8 bg-white dark:bg-slate-900/10 rounded-[2.5rem] border border-dashed border-slate-200 dark:border-slate-800 mt-6 w-full min-w-0 animate-in fade-in zoom-in-95 duration-500">
+            <div className="w-12 h-12 rounded-2xl bg-slate-50 dark:bg-slate-900 flex items-center justify-center mx-auto mb-4 text-slate-300 dark:text-slate-700">
+               <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" /></svg>
+            </div>
+            <p className="text-slate-400 dark:text-slate-500 text-sm font-medium italic">No commentary yet. Be the first to share an insight.</p>
+          </div>
+        ) : (
+          <div className="animate-in slide-in-from-bottom-4 duration-500">
+            {renderTree(null, 0)}
+          </div>
+        )}
+      </div>
     </div>
   );
 };
