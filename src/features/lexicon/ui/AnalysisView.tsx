@@ -9,7 +9,8 @@ interface AnalysisViewProps {
 }
 
 export const AnalysisView = ({ wordContext, isGreek }: AnalysisViewProps) => {
-  // Default variants to an empty object to prevent "possibly undefined" errors
+  // FIX: Default 'variants' to an empty object during destructuring
+  // This satisfies TypeScript and prevents "possibly undefined" runtime crashes
   const { meaning, semantic_domain, variants = {} } = wordContext;
 
   // Filter variants, strictly excluding the Documentary Hypothesis as requested

@@ -27,18 +27,24 @@ export const WordTooltip = ({
   const [coords, setCoords] = useState({ top: 0, left: 0, arrowLeft: 0, placement: initialPlacement });
   const [mounted, setMounted] = useState(false); 
   const triggerRef = useRef<HTMLSpanElement>(null);
+  const hasFetchedRef = useRef(false);
 
-  // FIX: Push the mount state update to the next tick to avoid synchronous cascading renders
+  // Push the mount state update to the next tick to avoid synchronous cascading renders.
+  // Explicitly using window.setTimeout resolves Node vs DOM type definition errors during Vercel builds.
   useEffect(() => {
-    const timeoutId = setTimeout(() => {
+    const timeoutId = window.setTimeout(() => {
       setMounted(true);
     }, 0);
-    return () => clearTimeout(timeoutId);
+    return () => window.clearTimeout(timeoutId);
   }, []);
 
   useEffect(() => {
+    // Lazy-load lexicon data ONLY when the word is hovered.
+    // This prevents hundreds of simultaneous Supabase queries from firing on page load.
+    if (!word.strongs || !isHovered || hasFetchedRef.current) return;
+
     const fetchLexicon = async () => {
-      if (!word.strongs) return;
+      hasFetchedRef.current = true; // Lock further fetch attempts
       const { data } = await supabase
         .from('lexicon')
         .select('pronunciation, transliteration, short_def')
@@ -53,8 +59,9 @@ export const WordTooltip = ({
         });
       }
     };
+    
     fetchLexicon();
-  }, [word.strongs]);
+  }, [word.strongs, isHovered]);
 
   // Logic to calculate fixed position for the Portal
   const updatePosition = () => {
