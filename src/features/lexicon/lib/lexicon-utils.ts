@@ -1,12 +1,20 @@
 // Path: src/features/lexicon/lib/lexicon-utils.ts
 
 /**
- * Normalizes Strong's IDs to the standard format used in the database (e.g., "1254" -> "H1254")
+ * Normalizes Strong's IDs to the standard format used in the database.
+ * Handles both Hebrew (H) and Greek (G) prefixes.
  */
 export const getNormalizedStrongsId = (id: string | null): string => {
   if (!id) return '';
   const upper = id.toUpperCase().trim();
-  return upper.startsWith('H') ? upper : `H${upper}`;
+  
+  // If it already has a valid prefix, return as is
+  if (upper.startsWith('H') || upper.startsWith('G')) {
+    return upper;
+  }
+  
+  // Default to Hebrew (H) if no prefix is present (backward compatibility)
+  return `H${upper}`;
 };
 
 /**

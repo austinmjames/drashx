@@ -6,7 +6,7 @@ import { useRouter, useParams, useSearchParams } from 'next/navigation';
 import { User as SupabaseUser } from '@supabase/supabase-js';
 import dynamic from 'next/dynamic';
 import { supabase } from '../../../shared/api/supabase';
-import { VerseCard, Verse } from '../../../entities/verse/ui/VerseCard';
+import { VerseCard, Verse, VerseWord } from '../../../entities/verse/ui/VerseCard';
 import { TableOfContents } from '../../../widgets/table-of-contents/ui/TableOfContents';
 import { ReaderHeader } from '../../../widgets/reader-header/ui/ReaderHeader';
 import { InsightsPanel } from '../../../widgets/insights-panel/ui/InsightsPanel';
@@ -28,12 +28,15 @@ const ProfileSettings = dynamic(() =>
 
 let globalIsSidebarOpen = true;
 
+// --- Types ---
+export type TranslationOption = 'default' | 'jps1917' | 'modernized' | 'web';
+
 interface Group { id: string; name: string; icon_url?: string; color_theme?: string; }
 interface GroupMemberJoin { group_id: string; groups: Group | Group[]; }
 interface ProfilePreferences {
   last_group_id?: string | null;
   reader_language_mode?: 'both' | 'en' | 'he' | null;
-  reader_translation?: 'jps1917' | 'modernized' | null;
+  reader_translation?: TranslationOption | null; 
   reader_hebrew_style?: 'niqqud' | 'no-niqqud' | null;
   last_book?: string | null;
   last_chapter?: number | null;
@@ -49,8 +52,8 @@ const VerseSkeleton = () => (
 interface ReaderPageProps {
   bookName?: string;
   chapterNumber?: number;
-  initialVerses?: Verse[]; // Added for Server-Side Fetching
-  initialHebrewTitle?: string; // Added for Server-Side Fetching
+  initialVerses?: Verse[]; 
+  initialHebrewTitle?: string; 
 }
 
 export const ReaderPage = ({ bookName, chapterNumber, initialVerses, initialHebrewTitle }: ReaderPageProps) => {
@@ -67,7 +70,7 @@ export const ReaderPage = ({ bookName, chapterNumber, initialVerses, initialHebr
   const [isAuthSettled, setIsAuthSettled] = useState(false);
   
   const [languageMode, setLanguageMode] = useState<'both' | 'en' | 'he'>('both');
-  const [translation, setTranslation] = useState<'jps1917' | 'modernized'>('jps1917');
+  const [translation, setTranslation] = useState<TranslationOption>('default');
   const [hebrewStyle, setHebrewStyle] = useState<'niqqud' | 'no-niqqud'>('niqqud');
 
   const [user, setUser] = useState<SupabaseUser | null>(null);
@@ -80,12 +83,12 @@ export const ReaderPage = ({ bookName, chapterNumber, initialVerses, initialHebr
   // --- State Initialization with Props (SSR Optimization) ---
   const [verses, setVerses] = useState<Verse[]>(initialVerses || []);
   const [hebrewTitle, setHebrewTitle] = useState(initialHebrewTitle || '');
-  const [isLoading, setIsLoading] = useState(!initialVerses); // Only load if props are missing
+  const [isLoading, setIsLoading] = useState(!initialVerses); 
   const [fetchError, setFetchError] = useState<string | null>(null);
   const [selectedVerse, setSelectedVerse] = useState<Verse | null>(null);
   const [selectedStrongs, setSelectedStrongs] = useState<string | null>(null);
+  const [selectedWordContext, setSelectedWordContext] = useState<VerseWord | null>(null);
 
-  // Track the version of data we currently have to avoid unnecessary flashes
   const dataRef = useRef({ book: activeBook, chapter: activeChapter });
 
   // --- Navigation Support: Scrolling Logic ---
@@ -103,7 +106,7 @@ export const ReaderPage = ({ bookName, chapterNumber, initialVerses, initialHebr
   useEffect(() => {
     const vParam = searchParams.get('v');
     if (vParam && !isLoading && verses.length > 0) {
-      scrollToVerse(parseInt(vParam));
+      scrollToVerse(parseInt(vParam, 10));
     }
   }, [searchParams, isLoading, verses, scrollToVerse]);
 
@@ -119,6 +122,17 @@ export const ReaderPage = ({ bookName, chapterNumber, initialVerses, initialHebr
     window.addEventListener('reader-jump-to-verse', handleJumpEvent);
     return () => window.removeEventListener('reader-jump-to-verse', handleJumpEvent);
   }, [activeBook, activeChapter, scrollToVerse]);
+
+  // --- Add Global Lexicon Pivot Listener ---
+  useEffect(() => {
+    const handleLexiconPivot = (e: Event) => {
+      const customEvent = e as CustomEvent<string>;
+      setSelectedStrongs(customEvent.detail);
+      setSelectedWordContext(null);
+    };
+    window.addEventListener('lexicon-pivot', handleLexiconPivot);
+    return () => window.removeEventListener('lexicon-pivot', handleLexiconPivot);
+  }, []);
 
   // --- Profile Preference Logic ---
   useEffect(() => {
@@ -198,7 +212,7 @@ export const ReaderPage = ({ bookName, chapterNumber, initialVerses, initialHebr
     updatePreference({ reader_language_mode: mode });
   };
 
-  const handleSetTranslation = (trans: 'jps1917' | 'modernized') => {
+  const handleSetTranslation = (trans: TranslationOption) => {
     setTranslation(trans);
     updatePreference({ reader_translation: trans });
   };
@@ -210,11 +224,9 @@ export const ReaderPage = ({ bookName, chapterNumber, initialVerses, initialHebr
 
   // --- Data Fetching Effect (Backup + Client-Side Navigation) ---
   useEffect(() => {
-    const fetchVerses = async () => {
+    const fetchVersesData = async () => {
       const cleanBookName = activeBook && activeBook !== 'undefined' ? decodeURIComponent(activeBook).trim() : '';
       
-      // Skip fetching if the currently loaded data matches the URL parameters
-      // This allows the initial SSR data to persist on first load.
       if (dataRef.current.book === cleanBookName && dataRef.current.chapter === activeChapter && verses.length > 0) {
         return;
       }
@@ -239,7 +251,7 @@ export const ReaderPage = ({ bookName, chapterNumber, initialVerses, initialHebr
       }
     };
 
-    if (activeBook) fetchVerses();
+    if (activeBook) fetchVersesData();
   }, [activeBook, activeChapter, verses.length]); 
 
   return (
@@ -265,7 +277,9 @@ export const ReaderPage = ({ bookName, chapterNumber, initialVerses, initialHebr
             handlePrevChapter={() => activeChapter > 1 && router.push(`/read/${encodeURIComponent(activeBook)}/${activeChapter - 1}`)}
             handleNextChapter={() => router.push(`/read/${encodeURIComponent(activeBook)}/${activeChapter + 1}`)}
             languageMode={languageMode} setLanguageMode={handleSetLanguageMode}
-            translation={translation} setTranslation={handleSetTranslation}
+            // Removed restricted narrow casting to ensure full compatibility with the updated ReaderHeader union types
+            translation={translation} 
+            setTranslation={handleSetTranslation}
             hebrewStyle={hebrewStyle} setHebrewStyle={handleSetHebrewStyle}
           />
           <div className="max-w-3xl mx-auto py-6 md:py-8 w-full flex-1 md:px-6">
@@ -286,7 +300,7 @@ export const ReaderPage = ({ bookName, chapterNumber, initialVerses, initialHebr
                     active={(selectedVerse?.verse_id || selectedVerse?.id) === (v.verse_id || v.id)} 
                     languageMode={languageMode} hebrewStyle={hebrewStyle} translation={translation} 
                     onClick={() => { setSelectedVerse(v); setIsInsightsOpen(true); }}
-                    onWordClick={setSelectedStrongs} 
+                    onWordClick={(w) => { setSelectedStrongs(w.strongs); setSelectedWordContext(w); }} 
                     groupId={activeGroupId}
                     userId={user?.id || null}
                   />
@@ -319,8 +333,9 @@ export const ReaderPage = ({ bookName, chapterNumber, initialVerses, initialHebr
       {selectedStrongs && (
         <LexiconModal 
           strongsNumber={selectedStrongs} 
+          wordContext={selectedWordContext}
           isOpen={!!selectedStrongs} 
-          onClose={() => setSelectedStrongs(null)} 
+          onClose={() => { setSelectedStrongs(null); setSelectedWordContext(null); }} 
           verseTranslation={verses.find(v => (v.words || []).some(w => w.strongs === selectedStrongs))?.text_en || ''}
         />
       )}

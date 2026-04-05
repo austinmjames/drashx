@@ -1,7 +1,14 @@
 // Path: src/widgets/reader-header/ui/ReaderHeader.tsx
-import React from 'react';
-import { PanelLeftClose, PanelLeftOpen, ChevronLeft, ChevronRight, MessageSquare } from 'lucide-react';
+import React, { useMemo } from 'react';
+import { 
+  PanelLeftClose, 
+  PanelLeftOpen, 
+  ChevronLeft, 
+  ChevronRight, 
+  MessageSquare
+} from 'lucide-react';
 import { ReaderSettingsMenu } from '../../../features/reader/reader-settings/ui/ReaderSettingsMenu';
+import { TranslationOption } from '../../../views/reader/ui/ReaderPage';
 
 interface ReaderHeaderProps {
   isSidebarOpen: boolean;
@@ -14,15 +21,20 @@ interface ReaderHeaderProps {
   handlePrevChapter: () => void;
   handleNextChapter: () => void;
   
-  // Settings State
+  // Settings State - Standardized to use TranslationOption union from ReaderPage
   languageMode: 'both' | 'en' | 'he';
   setLanguageMode: (mode: 'both' | 'en' | 'he') => void;
-  translation: 'jps1917' | 'modernized';
-  setTranslation: (trans: 'jps1917' | 'modernized') => void;
+  translation: TranslationOption;
+  setTranslation: (trans: TranslationOption) => void; 
   hebrewStyle: 'niqqud' | 'no-niqqud';
   setHebrewStyle: (style: 'niqqud' | 'no-niqqud') => void;
 }
 
+/**
+ * ReaderHeader 2.0
+ * The primary navigation and command bar for the DrashX Reader.
+ * Orchestrates chapter navigation and global text settings.
+ */
 export const ReaderHeader = ({
   isSidebarOpen, toggleSidebar,
   isInsightsOpen, toggleInsights,
@@ -32,69 +44,99 @@ export const ReaderHeader = ({
   translation, setTranslation,
   hebrewStyle, setHebrewStyle
 }: ReaderHeaderProps) => {
+
+  /**
+   * Scholarly Formatting Utility
+   * Ensures "genesis" -> "Genesis" and "i samuel" -> "I Samuel"
+   */
+  const formattedBookName = useMemo(() => {
+    if (!activeBook) return '';
+    return activeBook
+      .split(' ')
+      .map(word => {
+        const lower = word.toLowerCase();
+        // Handle Roman Numerals (I, II, III)
+        if (['i', 'ii', 'iii'].includes(lower)) return word.toUpperCase();
+        // Standard Title Case
+        return word.charAt(0).toUpperCase() + word.slice(1).toLowerCase();
+      })
+      .join(' ');
+  }, [activeBook]);
+
   return (
-    <header className="sticky top-0 z-10 px-2 py-3 md:p-4 bg-white/90 dark:bg-slate-950/90 backdrop-blur-md border-b border-slate-100 dark:border-slate-900 flex items-center justify-between">
+    <header className="sticky top-0 z-40 px-3 py-3 md:px-6 md:py-4 bg-white/90 dark:bg-slate-950/90 backdrop-blur-xl border-b border-slate-100 dark:border-slate-800 flex items-center justify-between shadow-sm">
       
-      {/* Left: Sidebar Toggle */}
+      {/* Left: Sidebar Control */}
       <div className="flex-1 flex items-center shrink-0">
         <button
           onClick={toggleSidebar}
-          title={isSidebarOpen ? "Collapse sidebar" : "Expand sidebar"}
-          aria-label={isSidebarOpen ? "Collapse sidebar" : "Expand sidebar"}
-          className="p-2 rounded-xl hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-500 transition-colors active:scale-95"
+          title={isSidebarOpen ? "Collapse navigation" : "Expand navigation"}
+          aria-label={isSidebarOpen ? "Collapse navigation" : "Expand navigation"}
+          className={`p-2 rounded-xl transition-all duration-300 active:scale-90 ${
+            isSidebarOpen 
+              ? 'bg-slate-100 dark:bg-slate-800 text-indigo-600' 
+              : 'text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-900 hover:text-slate-600'
+          }`}
         >
           {isSidebarOpen ? <PanelLeftClose size={22} /> : <PanelLeftOpen size={22} />}
         </button>
       </div>
 
-      {/* Center: Navigation & Title */}
-      <div className="flex items-center gap-1 md:gap-6 shrink-0">
+      {/* Center: Navigation Bridge & Canon Title */}
+      <div className="flex items-center gap-2 md:gap-8 shrink-0">
         <button 
           onClick={handlePrevChapter} 
           disabled={activeChapter <= 1} 
           title="Previous Chapter"
           aria-label="Previous Chapter"
-          className="p-1.5 md:p-2 rounded-full hover:bg-slate-100 dark:hover:bg-slate-800 disabled:opacity-30 active:scale-95 transition-transform"
+          className="p-2 rounded-full hover:bg-slate-100 dark:hover:bg-slate-800 disabled:opacity-20 active:scale-90 transition-all text-slate-400 hover:text-indigo-600"
         >
-          <ChevronLeft size={24}/>
+          <ChevronLeft size={24} strokeWidth={2.5} />
         </button>
-        <div className="text-center min-w-25 md:min-w-30">
-          <h1 className="text-lg md:text-xl font-bold text-slate-900 dark:text-slate-100 capitalize leading-tight">
-            {activeBook} {activeChapter}
+
+        <div className="flex flex-col items-center min-w-28 md:min-w-40 text-center select-none">
+          <h1 className="text-base md:text-xl font-normal text-slate-900 dark:text-white tracking-tight leading-none flex items-center gap-2">
+            {formattedBookName} {activeChapter}
           </h1>
-          <p className="text-[10px] md:text-xs font-bold text-slate-400 uppercase tracking-widest mt-0.5 md:mt-0">
-            {hebrewTitle || '...'}
-          </p>
+          <div className="mt-1.5 flex items-center gap-2">
+            <div className="h-px w-2 bg-slate-200 dark:bg-slate-800" />
+            <p className="text-sm md:text-base font-hebrew font-normal text-slate-500 dark:text-slate-400 tracking-normal" dir="rtl">
+              {hebrewTitle || '...'}
+            </p>
+            <div className="h-px w-2 bg-slate-200 dark:bg-slate-800" />
+          </div>
         </div>
+
         <button 
           onClick={handleNextChapter} 
           title="Next Chapter"
           aria-label="Next Chapter"
-          className="p-1.5 md:p-2 rounded-full hover:bg-slate-100 dark:hover:bg-slate-800 active:scale-95 transition-transform"
+          className="p-2 rounded-full hover:bg-slate-100 dark:hover:bg-slate-800 active:scale-90 transition-all text-slate-400 hover:text-indigo-600"
         >
-          <ChevronRight size={24}/>
+          <ChevronRight size={24} strokeWidth={2.5} />
         </button>
       </div>
 
-      {/* Right: Settings & Mobile Insights Toggle */}
-      <div className="flex-1 flex justify-end items-center shrink-0 gap-1 md:gap-2">
+      {/* Right: Settings Hub & Commentary Toggle */}
+      <div className="flex-1 flex justify-end items-center shrink-0 gap-1 md:gap-3">
         <ReaderSettingsMenu 
           languageMode={languageMode} setLanguageMode={setLanguageMode}
-          translation={translation} setTranslation={setTranslation}
+          translation={translation} setTranslation={(trans) => setTranslation(trans as TranslationOption)}
           hebrewStyle={hebrewStyle} setHebrewStyle={setHebrewStyle}
         />
         
-        {/* Mobile-only Insights Toggle Button */}
+        {/* Mobile Commentary Toggle: Visible only on small screens */}
         <button
           onClick={toggleInsights}
-          title="Toggle Commentary"
-          className={`md:hidden p-2 rounded-xl transition-all active:scale-95 ${
+          title={isInsightsOpen ? "Close Commentary" : "Open Commentary"}
+          aria-label={isInsightsOpen ? "Close Commentary" : "Open Commentary"}
+          className={`md:hidden p-2.5 rounded-xl transition-all active:scale-90 border ${
             isInsightsOpen 
-              ? 'bg-indigo-100 text-indigo-700 dark:bg-indigo-900/40 dark:text-indigo-400' 
-              : 'text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800'
+              ? 'bg-indigo-600 border-indigo-500 text-white shadow-lg shadow-indigo-600/20' 
+              : 'bg-white dark:bg-slate-900 border-slate-100 dark:border-slate-800 text-slate-500 hover:border-slate-200'
           }`}
         >
-          <MessageSquare size={22} />
+          <MessageSquare size={20} fill={isInsightsOpen ? "currentColor" : "none"} />
         </button>
       </div>
     </header>
