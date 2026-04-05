@@ -23,7 +23,7 @@ const getBookAbbreviation = (name: string): string => {
     'Genesis': 'Gen', 'Exodus': 'Exo', 'Leviticus': 'Lev', 'Numbers': 'Num', 'Deuteronomy': 'Deu',
     'Joshua': 'Jos', 'Judges': 'Jud', 'I Samuel': '1 Sam', 'II Samuel': '2 Sam', 'I Kings': '1 Kin', 'II Kings': '2 Kin',
     'Isaiah': 'Isa', 'Jeremiah': 'Jer', 'Ezekiel': 'Eze', 'Hosea': 'Hos', 'Joel': 'Joe', 'Amos': 'Amo', 'Obadiah': 'Oba',
-    'Jonah': 'Jon', 'Micah': 'Hab', 'Habakkuk': 'Hab', 'Zephaniah': 'Zep', 'Haggai': 'Hag', 'Zechariah': 'Zec', 'Malachi': 'Mal',
+    'Jonah': 'Jon', 'Micah': 'Mic', 'Nahum': 'Nah', 'Habakkuk': 'Hab', 'Zephaniah': 'Zep', 'Haggai': 'Hag', 'Zechariah': 'Zec', 'Malachi': 'Mal',
     'Psalms': 'Psa', 'Proverbs': 'Pro', 'Job': 'Job', 'Song of Songs': 'Song', 'Ruth': 'Rut', 'Lamentations': 'Lam',
     'Ecclesiastes': 'Ecc', 'Esther': 'Est', 'Daniel': 'Dan', 'Ezra': 'Ezr', 'Nehemiah': 'Neh', 'I Chronicles': '1 Chr', 'II Chronicles': '2 Chr'
   };
@@ -73,7 +73,12 @@ export const InsightsPanel = (props: InsightsPanelProps) => {
   const [hasUnreadActivity, setHasUnreadActivity] = useState(false);
   
   const groupMenuRef = useRef<HTMLDivElement>(null);
-  const activeVerseId = selectedVerse?.verse_id || selectedVerse?.id;
+  
+  // FIX: Force activeVerseId to string to satisfy TypeScript and UUID requirements.
+  // The Verse interface allows number or string, but current database logic uses UUID strings.
+  const activeVerseId = selectedVerse 
+    ? String(selectedVerse.verse_id || selectedVerse.id) 
+    : undefined;
 
   // Keep Ref in sync with state to use inside callbacks without causing re-renders
   useEffect(() => {
@@ -427,7 +432,7 @@ export const InsightsPanel = (props: InsightsPanelProps) => {
         ) : (
           <div className="flex-1 flex flex-col overflow-hidden min-w-0 w-full">
              <div className="flex-1 overflow-y-auto overflow-x-hidden scrollbar-hide px-6 py-2 w-full">
-                {selectedVerse && activeVerseId !== undefined ? (
+                {selectedVerse && activeVerseId ? (
                   <CommentThread verseId={activeVerseId} groupId={activeGroupId === user?.id ? undefined : (activeGroupId || undefined)} />
                 ) : !isLoading && (
                   <div className="h-full py-32 flex flex-col items-center justify-center text-slate-400 gap-4 p-8 text-center w-full">
@@ -455,7 +460,7 @@ export const InsightsPanel = (props: InsightsPanelProps) => {
       {selectedVerse && isAddingInsight && activeVerseId && (
         <div className="absolute inset-0 z-50 bg-white dark:bg-slate-950 flex flex-col animate-in slide-in-from-bottom-8 duration-300">
            <AddCommentForm 
-             verseId={activeVerseId as string} 
+             verseId={activeVerseId} 
              groupId={activeGroupId === user?.id ? undefined : (activeGroupId || undefined)}
              onSuccess={() => setIsAddingInsight(false)} 
              onCancel={() => setIsAddingInsight(false)}
