@@ -1,7 +1,8 @@
 // Path: src/features/lexicon/ui/ReferencesTab.tsx
-import React, { RefObject } from 'react';
+import React, { RefObject, useMemo } from 'react';
 import { Search, ArrowRight, Loader2 } from 'lucide-react';
 import { HebrewVerseRenderer } from '../../../entities/verse/ui/HebrewVerseRenderer';
+import { GreekVerseRenderer } from '../../../entities/verse/ui/GreekVerseRenderer';
 import { VerseWord } from '../../../entities/verse/ui/VerseCard';
 import { ReferenceLink } from '../../../shared/ui/ReferenceLink';
 
@@ -21,7 +22,8 @@ interface ReferencesTabProps {
   referenceCount: number;
   loaderRef: RefObject<HTMLDivElement | null>;
   highlightStrongs?: string | null;
-  onWordClick?: (strongs: string) => void;
+  // UPDATED: Now expects the full VerseWord object to support the Analysis Tab
+  onWordClick?: (word: VerseWord) => void;
   onReferenceClick?: (book: string, chapter: number, verse: number) => void;
 }
 
@@ -35,12 +37,9 @@ export const ReferencesTab = ({
   onWordClick,
   onReferenceClick
 }: ReferencesTabProps) => {
+  const isGreekSearch = useMemo(() => highlightStrongs?.startsWith('G'), [highlightStrongs]);
+
   return (
-    /**
-     * REFINED SPACING: 
-     * pt-2 closes the gap between the sticky Nav and the first item.
-     * px-6 and pb-8 provide comfortable horizontal and bottom breathing room.
-     */
     <div className="pt-2 px-6 pb-8 space-y-2 animate-in slide-in-from-bottom-4 duration-500">
       <div className="divide-y divide-slate-100 dark:divide-slate-800">
         {references.length === 0 && !loading ? (
@@ -51,11 +50,6 @@ export const ReferencesTab = ({
         ) : (
           <>
             {references.map((ref, idx) => (
-              /**
-               * ITEM SPACING:
-               * py-5 (reduced from py-8) makes the list more efficient and 
-               * improves tooltip flip detection.
-               */
               <div key={idx} className="py-5 group cursor-default space-y-3">
                 <div className="flex items-center gap-2">
                   <ReferenceLink 
@@ -63,23 +57,33 @@ export const ReferencesTab = ({
                     chapter={ref.chapter_number} 
                     verse={ref.verse_number} 
                     onClick={() => onReferenceClick?.(ref.book_name, ref.chapter_number, ref.verse_number)}
-                    hidePreview={true} // Logic added to disable the hover preview here
+                    hidePreview={true} 
                   />
                   <div className="h-px grow bg-slate-50 dark:bg-slate-800" />
                   <ArrowRight size={12} className="text-slate-300 opacity-0 group-hover:opacity-100 transition-opacity" />
                 </div>
                 <div className="space-y-3">
                   {ref.words && ref.words.length > 0 ? (
-                    <HebrewVerseRenderer 
-                      words={ref.words} 
-                      hebrewStyle="niqqud" 
-                      verseTranslation={ref.translation}
-                      onWordClick={onWordClick}
-                      highlightStrongs={highlightStrongs}
-                      size="md" // Uses smaller font for reference list
-                    />
+                    isGreekSearch ? (
+                      <GreekVerseRenderer 
+                        words={ref.words} 
+                        verseTranslation={ref.translation}
+                        onWordClick={onWordClick}
+                        highlightStrongs={highlightStrongs}
+                        size="md" // Mapped to 1x size in renderer
+                      />
+                    ) : (
+                      <HebrewVerseRenderer 
+                        words={ref.words} 
+                        hebrewStyle="niqqud" 
+                        verseTranslation={ref.translation}
+                        onWordClick={onWordClick}
+                        highlightStrongs={highlightStrongs}
+                        size="md" // Mapped to 1.3x size in renderer
+                      />
+                    )
                   ) : (
-                    <p className="text-2xl font-serif text-slate-900 dark:text-slate-200 dir-rtl text-right leading-relaxed tracking-wide">
+                    <p className={`font-serif text-slate-900 dark:text-slate-200 leading-relaxed tracking-wide ${isGreekSearch ? 'text-base text-left' : 'text-xl text-right'}`} dir={isGreekSearch ? 'ltr' : 'rtl'}>
                       {ref.text}
                     </p>
                   )}

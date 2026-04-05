@@ -1,4 +1,5 @@
 // Path: src/features/lexicon/model/types.ts
+import { VerseWord } from '@/entities/verse/ui/VerseCard';
 
 export interface LexiconEntry {
   id: string; // Strong's number e.g., H1254
@@ -7,6 +8,9 @@ export interface LexiconEntry {
   pronunciation: string | null;
   short_def: string | null;
   long_def: string | null;
+  root_id?: string | null;
+  semantic_domain?: string | null;
+  origin_id?: string | null;
 }
 
 export interface Occurrence {
@@ -14,6 +18,8 @@ export interface Occurrence {
   chapter_number: number;
   verse_number: number;
   text: string;
+  translation: string; // Added for English display in ReferencesTab
+  words?: VerseWord[]; // Added for Greek/Hebrew word-level highlighting
 }
 
 export interface SupabaseBook {
@@ -28,5 +34,7 @@ export interface SupabaseChapter {
 export interface SupabaseVerseResponse {
   verse_number: number;
   text_he: string;
+  text_en?: string | null; // Added
+  words?: VerseWord[];     // Added
   chapters: SupabaseChapter | SupabaseChapter[] | null;
 }

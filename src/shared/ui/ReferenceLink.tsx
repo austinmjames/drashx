@@ -3,7 +3,7 @@
 
 import React, { useState, useCallback, useRef } from 'react';
 import { createPortal } from 'react-dom';
-import { ExternalLink, BookOpen, Loader2 } from 'lucide-react';
+import { BookOpen, Loader2, Lock, Sparkles, ExternalLink } from 'lucide-react';
 import { supabase } from '@/shared/api/supabase';
 
 interface ReferenceLinkProps {
@@ -27,13 +27,16 @@ export const ReferenceLink = ({
   onClick,
   hidePreview = false,
   variant = 'default',
-  hideIcon = false
+  hideIcon = false 
 }: ReferenceLinkProps) => {
   const [preview, setPreview] = useState<{ he: string; en: string } | null>(null);
   const [loading, setLoading] = useState(false);
+  const [enabling, setEnabling] = useState(false);
   const [isHovered, setIsHovered] = useState(false);
   
-  // Advanced Dynamic Placement State (Viewport Relative for Portal)
+  const [isRestricted, setIsRestricted] = useState<boolean | null>(null);
+  const [targetCollection, setTargetCollection] = useState<string>('Tanakh');
+
   const [tooltipStyle, setTooltipStyle] = useState({
     top: 0,
     left: 0,
@@ -44,13 +47,59 @@ export const ReferenceLink = ({
   });
 
   const buttonRef = useRef<HTMLButtonElement>(null);
-
   const displayLabel = label || `${book} ${chapter}:${verse}`;
   const isRange = displayLabel.includes('-') || displayLabel.includes(',');
+
+  const checkAccess = useCallback(async (retryCount = 0): Promise<boolean> => {
+    try {
+      const { data: bookMeta } = await supabase
+        .from('books')
+        .select('collection')
+        .ilike('name_en', book.trim())
+        .single();
+      
+      const collection = bookMeta?.collection || 'Tanakh';
+      setTargetCollection(collection);
+
+      if (collection === 'Tanakh') {
+        setIsRestricted(false);
+        return false;
+      }
+
+      const { data: { user }, error: authError } = await supabase.auth.getUser();
+      if (authError) throw authError;
+
+      if (!user) {
+        setIsRestricted(true);
+        return true;
+      }
+
+      const { data: profile } = await supabase
+        .from('profiles')
+        .select('enabled_collections')
+        .eq('id', user.id)
+        .single();
+      
+      const restricted = !profile?.enabled_collections?.includes(collection);
+      setIsRestricted(restricted);
+      return restricted;
+    } catch (err: unknown) {
+      const errorMsg = err instanceof Error ? err.message : String(err);
+      if ((errorMsg.includes('lock') || errorMsg.includes('stole')) && retryCount < 3) {
+        const delay = Math.pow(2, retryCount) * 400 + Math.random() * 300;
+        await new Promise(res => setTimeout(res, delay));
+        return checkAccess(retryCount + 1);
+      }
+      return false;
+    }
+  }, [book]);
 
   const fetchPreview = useCallback(async () => {
     if (hidePreview || preview || loading) return;
     setLoading(true);
+    const restricted = await checkAccess();
+    if (restricted) { setLoading(false); return; }
+
     try {
       const { data, error } = await supabase
         .from('reader_verses_view')
@@ -60,15 +109,32 @@ export const ReferenceLink = ({
         .eq('verse_num', verse)
         .single();
       
-      if (data && !error) {
-        setPreview({ he: data.text_he, en: data.text_en || '' });
-      }
+      if (data && !error) setPreview({ he: data.text_he, en: data.text_en || '' });
     } catch (e) {
       console.error("Preview fetch error", e);
     } finally {
       setLoading(false);
     }
-  }, [book, chapter, verse, hidePreview, preview, loading]);
+  }, [book, chapter, verse, hidePreview, preview, loading, checkAccess]);
+
+  const handleEnableCollection = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    setEnabling(true);
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) throw new Error("Must be logged in");
+      const { data: profile } = await supabase.from('profiles').select('enabled_collections').eq('id', user.id).single();
+      const currentCols = profile?.enabled_collections || ['Tanakh'];
+      const updatedCols = Array.from(new Set([...currentCols, targetCollection]));
+      await supabase.from('profiles').update({ extended_library_enabled: true, enabled_collections: updatedCols, updated_at: new Date().toISOString() }).eq('id', user.id);
+      setIsRestricted(false);
+      setTimeout(fetchPreview, 50);
+    } catch (err) {
+      console.error("Failed to enable collection:", err);
+    } finally {
+      setEnabling(false);
+    }
+  };
 
   const handleMouseEnter = (e: React.MouseEvent<HTMLElement>) => {
     if (hidePreview) return;
@@ -76,37 +142,39 @@ export const ReferenceLink = ({
     setIsHovered(true);
 
     const rect = e.currentTarget.getBoundingClientRect();
-    
-    // 1. HORIZONTAL CLAMPING (Fixed Viewport Relative)
+    const viewportHeight = window.innerHeight;
+    const viewportWidth = window.innerWidth;
     const tooltipWidth = 320; 
     const padding = 16; 
-    
+
+    // Horizontal Alignment
     const targetCenter = rect.left + (rect.width / 2);
     let tooltipLeft = targetCenter - (tooltipWidth / 2);
     
-    // Clamp to viewport
+    // Bounds Check: Prevent tooltip from bleeding off screen
     if (tooltipLeft < padding) tooltipLeft = padding;
-    if (tooltipLeft > window.innerWidth - tooltipWidth - padding) {
-      tooltipLeft = window.innerWidth - tooltipWidth - padding;
+    if (tooltipLeft > viewportWidth - tooltipWidth - padding) {
+      tooltipLeft = viewportWidth - tooltipWidth - padding;
     }
 
-    const cssArrowLeft = targetCenter - tooltipLeft;
-
-    // 2. VERTICAL FLIPPING
-    const tooltipHeight = 240; // Est max height
-    const spaceAbove = rect.top;
-    const spaceBelow = window.innerHeight - rect.bottom;
+    // Dynamic Arrow Positioning: The "^" follows the center of the trigger button
+    let cssArrowLeft = targetCenter - tooltipLeft;
     
-    const placement = spaceBelow < tooltipHeight && spaceAbove > spaceBelow ? 'top' : 'bottom';
-    const top = placement === 'top' ? rect.top - 12 : rect.bottom + 12;
+    // Clamp arrow so it doesn't break out of the bubble's rounded corners
+    if (cssArrowLeft < 24) cssArrowLeft = 24;
+    if (cssArrowLeft > tooltipWidth - 24) cssArrowLeft = tooltipWidth - 24;
+
+    // Vertical Flipping (Viewport Aware)
+    const estimatedHeight = isRestricted ? 220 : 340; 
+    const spaceAbove = rect.top;
+    const spaceBelow = viewportHeight - rect.bottom;
+    
+    const placement = (spaceBelow < estimatedHeight && spaceAbove > spaceBelow) ? 'top' : 'bottom';
+    const top = placement === 'top' ? rect.top - 8 : rect.bottom + 8;
 
     setTooltipStyle({
-      top,
-      left: tooltipLeft,
-      arrowLeft: cssArrowLeft,
-      placement,
-      opacity: 1,
-      scale: 1
+      top, left: tooltipLeft, arrowLeft: cssArrowLeft,
+      placement, opacity: 1, scale: 1
     });
   };
 
@@ -115,87 +183,105 @@ export const ReferenceLink = ({
     setTooltipStyle(prev => ({ ...prev, opacity: 0, scale: 0.95 }));
   };
 
-  const arrowPlacementClasses = tooltipStyle.placement === 'top' ? "-bottom-1.5 border-r border-b" : "-top-1.5 border-l border-t";
+  const handleLinkClick = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (isRestricted) return;
+    onClick(book, chapter, verse);
+  };
 
-  const baseColorClasses = variant === 'subtle'
-    ? "bg-slate-100 dark:bg-slate-800/50 text-slate-500 dark:text-slate-400 border-slate-200 dark:border-slate-700/50 hover:bg-slate-200 hover:dark:bg-slate-800 hover:text-slate-700 hover:dark:text-slate-300"
-    : variant === 'resolved'
-    ? "bg-white/10 text-blue-100 border-white/20 hover:bg-white/20 hover:text-white"
-    : "bg-indigo-50 dark:bg-indigo-900/30 text-indigo-600 dark:text-indigo-400 border-indigo-100 dark:border-indigo-800/50 hover:bg-indigo-600 hover:text-white";
+  const arrowPlacementClasses = tooltipStyle.placement === 'top' 
+    ? "-bottom-[6px] border-r border-b" 
+    : "-top-[6px] border-l border-t";
+
+  const baseColorClasses = isRestricted === true
+    ? "bg-slate-100 dark:bg-slate-800 text-slate-400 border-slate-200 dark:border-slate-700 opacity-60 grayscale cursor-not-allowed"
+    : variant === 'subtle'
+      ? "bg-slate-100 dark:bg-slate-800/50 text-slate-500 dark:text-slate-400 border-slate-200 dark:border-slate-700/50 hover:bg-slate-200 hover:dark:bg-slate-800 hover:text-slate-700 hover:dark:text-slate-300"
+      : variant === 'resolved'
+      ? "bg-white/10 text-blue-100 border-white/20 hover:bg-white/20 hover:text-white"
+      : "bg-slate-100 dark:bg-slate-800/40 text-slate-600 dark:text-slate-400 border-slate-200 dark:border-slate-800 hover:bg-slate-200 dark:hover:bg-slate-800 hover:text-slate-900 dark:hover:text-white";
 
   return (
     <>
       <button 
         ref={buttonRef}
-        onClick={(e) => {
-          e.stopPropagation();
-          onClick(book, chapter, verse);
-        }}
+        onClick={handleLinkClick}
         onMouseEnter={handleMouseEnter}
         onMouseLeave={handleMouseLeave}
         className={`inline-flex items-center gap-1.5 px-2 py-0.5 text-[10px] font-black rounded-md border shadow-sm transition-all group/badge active:scale-95 ${baseColorClasses} ${className}`}
-        title={`Jump to ${displayLabel}`}
+        title={isRestricted ? `${targetCollection} Restricted` : `Jump to ${displayLabel}`}
       >
+        {isRestricted && <Lock size={10} className="text-slate-400" />}
         {displayLabel}
-        {!hideIcon && <ExternalLink size={10} className="opacity-0 group-hover/badge:opacity-100 transition-opacity" />}
+        {!hideIcon && !isRestricted && (
+          <ExternalLink size={10} className="opacity-0 group-hover/badge:opacity-100 transition-opacity" />
+        )}
       </button>
 
-      {/* FIX: Use createPortal to move the tooltip to the end of document.body.
-          This prevents the parent's 'overflow: hidden' (from line-clamp) from clipping the preview.
-      */}
-      {!hidePreview && typeof document !== 'undefined' && createPortal(
+      {typeof document !== 'undefined' && createPortal(
         <div 
-          className={`fixed z-9999 pointer-events-none transition-all duration-200 ease-out`}
+          className="fixed z-9999 pointer-events-none duration-200 ease-out"
           style={{ 
             top: tooltipStyle.top, 
             left: tooltipStyle.left, 
             opacity: tooltipStyle.opacity,
-            transform: `scale(${tooltipStyle.scale}) translateY(${tooltipStyle.placement === 'top' ? '0' : '0'})`,
+            // Only translate Y upward when placement is 'top' to prevent clipping 
+            transform: `${tooltipStyle.placement === 'top' ? 'translateY(-100%) ' : ''}scale(${tooltipStyle.scale})`,
             transformOrigin: tooltipStyle.placement === 'top' ? 'bottom center' : 'top center',
+            // Animate only opacity and scale. transition-all caused the "fly-in" from 0,0.
+            transitionProperty: 'opacity, transform',
             visibility: isHovered ? 'visible' : 'hidden'
           }}
         >
-          <div className={`bg-white dark:bg-slate-900 rounded-2xl shadow-[0_20px_50px_rgba(0,0,0,0.2)] dark:shadow-[0_20px_50px_rgba(0,0,0,0.5)] border border-slate-200 dark:border-slate-800 p-5 w-[320px] flex flex-col gap-3 text-left ${tooltipStyle.placement === 'top' ? 'mb-3' : 'mt-3'}`}>
-            <div className="flex items-center gap-2 border-b border-slate-100 dark:border-slate-800 pb-2">
-              <BookOpen size={14} className="text-indigo-500 shrink-0" />
-              <span className="text-[10px] font-black uppercase tracking-widest text-slate-500 truncate">
-                {displayLabel}
-              </span>
-            </div>
+          {/* Main Bubble Container */}
+          <div className="relative bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 p-5 w-[320px] flex flex-col gap-3 text-left pointer-events-auto shadow-[0_20px_50px_rgba(0,0,0,0.15)] dark:shadow-[0_20px_50px_rgba(0,0,0,0.4)]">
             
-            {loading ? (
-              <div className="flex items-center gap-2 py-4 text-slate-400">
-                <Loader2 size={16} className="animate-spin" />
-                <span className="text-xs font-bold uppercase tracking-widest">Consulting Scrolls...</span>
-              </div>
-            ) : preview ? (
-              <div className="space-y-3">
-                <p className="text-xl font-serif text-slate-900 dark:text-slate-100 text-right leading-relaxed" dir="rtl">
-                  {preview.he}{isRange && " ..."}
-                </p>
-                <p className="text-sm text-slate-600 dark:text-slate-400 leading-relaxed italic border-l-2 border-slate-100 dark:border-slate-800 pl-3">
-                  {preview.en}{isRange && " ..."}
-                </p>
-                {isRange && (
-                  <div className="pt-2 text-center border-t border-slate-100 dark:border-slate-800">
-                    <span className="text-[9px] font-black uppercase tracking-widest text-indigo-500">
-                      View full range in reader
-                    </span>
+            {isRestricted ? (
+                <div className="py-2 text-center space-y-4">
+                  <div className="w-12 h-12 bg-amber-50 dark:bg-amber-900/20 text-amber-600 dark:text-amber-400 rounded-2xl flex items-center justify-center mx-auto shadow-sm rotate-3">
+                    <Lock size={24} />
                   </div>
-                )}
-              </div>
+                  <div>
+                    <h4 className="text-sm font-bold text-slate-900 dark:text-white">Library Access Restricted</h4>
+                    <p className="text-xs text-slate-500 dark:text-slate-400 mt-1 leading-relaxed px-2">
+                      The <span className="font-bold text-indigo-600 dark:text-indigo-400">{targetCollection}</span> collection has not yet been enabled.
+                    </p>
+                  </div>
+                  <button onClick={handleEnableCollection} disabled={enabling} className="w-full py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-[10px] font-black uppercase tracking-widest transition-all flex items-center justify-center gap-2 shadow-lg shadow-indigo-600/20 disabled:opacity-50 active:scale-95">
+                    {enabling ? <Loader2 size={14} className="animate-spin" /> : <Sparkles size={14} />}
+                    Enable {targetCollection}
+                  </button>
+                  <p className="text-[9px] font-bold text-slate-400 uppercase tracking-tighter">Manage in Account Settings &gt; Library</p>
+                </div>
             ) : (
-              <p className="text-xs text-slate-400 italic">Preview unavailable.</p>
+              <>
+                <div className="flex items-center gap-2 border-b border-slate-100 dark:border-slate-800 pb-2">
+                  <BookOpen size={14} className="text-indigo-500 shrink-0" />
+                  <span className="text-[10px] font-black uppercase tracking-widest text-slate-500 truncate">{displayLabel}</span>
+                </div>
+                {loading ? (
+                  <div className="flex items-center gap-2 py-6 text-slate-400">
+                    <Loader2 size={16} className="animate-spin" />
+                    <span className="text-[10px] font-black uppercase tracking-widest">Consulting Scrolls...</span>
+                  </div>
+                ) : preview ? (
+                  <div className="space-y-4">
+                    <p className="text-2xl font-serif text-slate-900 dark:text-slate-100 text-right leading-relaxed" dir="rtl">{preview.he}{isRange && " ..."}</p>
+                    <p className="text-sm text-slate-600 dark:text-slate-400 leading-relaxed italic border-l-2 border-slate-100 dark:border-slate-800 pl-3">{preview.en}{isRange && " ..."}</p>
+                  </div>
+                ) : (
+                  <p className="text-xs text-slate-400 italic py-4">Preview unavailable.</p>
+                )}
+              </>
             )}
-            
-            {/* Dynamically Slid Arrow */}
+
+            {/* The Dynamic Arrow ("^") */}
             <div 
               className={`absolute w-3 h-3 bg-white dark:bg-slate-900 rotate-45 border-slate-200 dark:border-slate-800 ${arrowPlacementClasses}`}
               style={{ 
                 left: tooltipStyle.arrowLeft, 
                 transform: 'translateX(-50%) rotate(45deg)',
-                bottom: tooltipStyle.placement === 'top' ? '-6px' : 'auto',
-                top: tooltipStyle.placement === 'bottom' ? '-6px' : 'auto'
+                zIndex: -1 // Sits behind the bubble background but above the page due to the portal's context
               }}
             />
           </div>
