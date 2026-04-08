@@ -66,46 +66,56 @@ export const TableOfContents = ({ userId, groupId }: TableOfContentsProps) => {
 
   // --- Initial Data Fetch & URL Sync ---
   useEffect(() => {
-    const fetchAndSync = async () => {
-      let dataToSync = cachedBooks;
-      if (!cachedBooks) {
-        const { data, error: fetchErr } = await supabase
-          .from('books')
-          .select(`id, name_en, category, chapters ( chapter_number )`)
-          .order('order_id', { ascending: true });
+    const fetchAndSync = async (retryCount = 0) => {
+      try {
+        let dataToSync = cachedBooks;
+        if (!cachedBooks) {
+          const { data, error: fetchErr } = await supabase
+            .from('books')
+            .select(`id, name_en, category, chapters ( chapter_number )`)
+            .order('order_id', { ascending: true });
+          
+          if (fetchErr) throw fetchErr;
+
+          const { data: collectionData, error: colErr } = await supabase.from('books').select('id, collection');
+          if (colErr) throw colErr;
+
+          if (data) {
+            dataToSync = (data as unknown as RawBookResponse[]).map((b) => {
+              const colInfo = collectionData?.find(c => c.id === b.id);
+              return {
+                ...b,
+                collection: colInfo?.collection || 'Tanakh',
+                chapters: b.chapters.sort((a, c) => a.chapter_number - c.chapter_number)
+              };
+            }) as BookType[];
+            
+            cachedBooks = dataToSync;
+            setBooks(dataToSync);
+          }
+        }
+
+        // SYNC LOGIC: Only force navigate to current chapter if we haven't synced this book yet
+        if (dataToSync && currentBookName && lastSyncedBookRef.current !== currentBookName) {
+          const foundBook = dataToSync.find(b => b.name_en.toLowerCase() === currentBookName.toLowerCase());
+          if (foundBook) {
+            setActiveBook(foundBook);
+            setActiveCategory(foundBook.category);
+            setActiveCollection(foundBook.collection || 'Tanakh');
+            lastSyncedBookRef.current = currentBookName;
+            setViewMode('chapters');
+          }
+        }
+      } catch (err: unknown) {
+        const errorObj = err as { message?: string };
+        const errorMsg = err instanceof Error ? err.message : String(errorObj?.message || err);
         
-        if (fetchErr) {
-          console.error("Failed to load library structure:", fetchErr);
+        if ((errorMsg.includes('lock') || errorMsg.includes('stole') || errorMsg.includes('fetch') || errorMsg.includes('AbortError')) && retryCount < 3) {
+          const delay = Math.pow(2, retryCount) * 400 + Math.random() * 400;
+          setTimeout(() => fetchAndSync(retryCount + 1), delay);
           return;
         }
-
-        const { data: collectionData } = await supabase.from('books').select('id, collection');
-
-        if (data) {
-          dataToSync = (data as unknown as RawBookResponse[]).map((b) => {
-            const colInfo = collectionData?.find(c => c.id === b.id);
-            return {
-              ...b,
-              collection: colInfo?.collection || 'Tanakh',
-              chapters: b.chapters.sort((a, c) => a.chapter_number - c.chapter_number)
-            };
-          }) as BookType[];
-          
-          cachedBooks = dataToSync;
-          setBooks(dataToSync);
-        }
-      }
-
-      // SYNC LOGIC: Only force navigate to current chapter if we haven't synced this book yet
-      if (dataToSync && currentBookName && lastSyncedBookRef.current !== currentBookName) {
-        const foundBook = dataToSync.find(b => b.name_en.toLowerCase() === currentBookName.toLowerCase());
-        if (foundBook) {
-          setActiveBook(foundBook);
-          setActiveCategory(foundBook.category);
-          setActiveCollection(foundBook.collection || 'Tanakh');
-          lastSyncedBookRef.current = currentBookName;
-          setViewMode('chapters');
-        }
+        console.error("Failed to load library structure:", errorMsg);
       }
     };
     fetchAndSync();
@@ -147,60 +157,76 @@ export const TableOfContents = ({ userId, groupId }: TableOfContentsProps) => {
         hasInitializedPrefs.current = true;
       }
     } catch (err: unknown) {
-      const errorMsg = err instanceof Error ? err.message : JSON.stringify(err);
-      if ((errorMsg.includes('lock') || errorMsg.includes('stole')) && retryCount < 3) {
+      const errorObj = err as { message?: string };
+      const errorMsg = err instanceof Error ? err.message : String(errorObj?.message || err);
+      
+      if ((errorMsg.includes('lock') || errorMsg.includes('stole') || errorMsg.includes('fetch') || errorMsg.includes('AbortError')) && retryCount < 3) {
         const delay = Math.pow(2, retryCount) * 400 + Math.random() * 400;
         setTimeout(() => fetchPrefs(retryCount + 1), delay);
         return;
       }
-      console.error("Error fetching ToC preferences:", err);
+      console.error("Error fetching ToC preferences:", errorMsg);
     }
-  }, [userId, currentBookName]); // REMOVED viewMode from dependencies to stop the reset loop
+  }, [userId, currentBookName]); 
 
   useEffect(() => {
     fetchPrefs();
   }, [fetchPrefs]);
 
   // --- Unread Notification Logic ---
-  const fetchUnread = useCallback(async () => {
+  const fetchUnread = useCallback(async (retryCount = 0) => {
     if (!userId) return;
-    const { data, error: rpcErr } = await supabase.rpc('get_unread_chapters', { 
-      p_user_id: userId, 
-      p_group_id: groupId || null 
-    });
-    
-    if (data && !rpcErr) {
-      const chapSet = new Set<string>();
-      const bookSet = new Set<string>();
-      
-      data.forEach((row: { book_name: string, chapter_number: number }) => {
-        chapSet.add(`${row.book_name}-${row.chapter_number}`);
-        bookSet.add(row.book_name);
+    try {
+      const { data, error: rpcErr } = await supabase.rpc('get_unread_chapters', { 
+        p_user_id: userId, 
+        p_group_id: groupId || null 
       });
       
-      setUnreadChapters(chapSet);
-      setUnreadBooks(bookSet);
+      if (rpcErr) throw rpcErr;
+
+      if (data) {
+        const chapSet = new Set<string>();
+        const bookSet = new Set<string>();
+        
+        data.forEach((row: { book_name: string, chapter_number: number }) => {
+          chapSet.add(`${row.book_name}-${row.chapter_number}`);
+          bookSet.add(row.book_name);
+        });
+        
+        setUnreadChapters(chapSet);
+        setUnreadBooks(bookSet);
+        
+        const catSet = new Set<string>();
+        const colSet = new Set<string>();
+        
+        books.forEach(b => { 
+          if (bookSet.has(b.name_en)) {
+            catSet.add(b.category); 
+            colSet.add(b.collection || 'Tanakh');
+          }
+        });
+        
+        setUnreadCategories(catSet);
+        setUnreadCollections(colSet);
+      }
+    } catch (err: unknown) {
+      const errorObj = err as { message?: string };
+      const errorMsg = err instanceof Error ? err.message : String(errorObj?.message || err);
       
-      const catSet = new Set<string>();
-      const colSet = new Set<string>();
-      
-      books.forEach(b => { 
-        if (bookSet.has(b.name_en)) {
-          catSet.add(b.category); 
-          colSet.add(b.collection || 'Tanakh');
-        }
-      });
-      
-      setUnreadCategories(catSet);
-      setUnreadCollections(colSet);
+      if ((errorMsg.includes('lock') || errorMsg.includes('stole') || errorMsg.includes('fetch') || errorMsg.includes('AbortError')) && retryCount < 3) {
+        const delay = Math.pow(2, retryCount) * 400 + Math.random() * 400;
+        setTimeout(() => fetchUnread(retryCount + 1), delay);
+        return;
+      }
+      console.error("Error fetching ToC unread data:", errorMsg);
     }
   }, [userId, groupId, books]);
 
   useEffect(() => {
     fetchUnread();
     if (!userId) return;
-    const receiptChannel = supabase.channel(`toc-receipts-${userId}`).on('postgres_changes', { event: '*', schema: 'public', table: 'verse_read_receipts', filter: `user_id=eq.${userId}` }, fetchUnread).subscribe();
-    const commentsChannel = supabase.channel(`toc-comments-${groupId || 'personal'}`).on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'comments', filter: groupId ? `group_id=eq.${groupId}` : 'group_id=is.null' }, fetchUnread).subscribe();
+    const receiptChannel = supabase.channel(`toc-receipts-${userId}`).on('postgres_changes', { event: '*', schema: 'public', table: 'verse_read_receipts', filter: `user_id=eq.${userId}` }, () => fetchUnread(0)).subscribe();
+    const commentsChannel = supabase.channel(`toc-comments-${groupId || 'personal'}`).on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'comments', filter: groupId ? `group_id=eq.${groupId}` : 'group_id=is.null' }, () => fetchUnread(0)).subscribe();
     return () => { 
       supabase.removeChannel(receiptChannel); 
       supabase.removeChannel(commentsChannel); 

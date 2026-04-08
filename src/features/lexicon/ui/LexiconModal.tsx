@@ -159,10 +159,9 @@ export const LexiconModal = ({
     wordContext?.text ? analyzeHebrewAffixes(wordContext.text) : []
   , [wordContext?.text]);
 
-  const formattedPronunciation = useMemo(() => {
-    const base = localEntry?.pronunciation !== 'N/A' ? localEntry?.pronunciation : localEntry?.transliteration;
-    if (!base || base === 'N/A') return null;
-    
+  const formatWithAffixes = useCallback((baseStr: string | null | undefined) => {
+    if (!baseStr || baseStr === 'N/A' || baseStr === '') return null;
+
     if (wordContext?.text?.includes('/')) {
       const parts = wordContext.text.split('/');
       const rootIdx = parts.reduce((max, p, i) => 
@@ -172,27 +171,49 @@ export const LexiconModal = ({
       const suf = parts.slice(rootIdx + 1).map(p => getAffixSound(p, false)).join('');
       
       return (
-        <span className="capitalize font-sans tracking-tight flex items-baseline">
-          {pre && <span className="font-black text-indigo-700 dark:text-indigo-300 opacity-90 mr-0.5">{pre}</span>}
-          <span className="font-semibold">{base.replace(/^-|-$/g, '')}</span>
-          {suf && <span className="font-black text-indigo-700 dark:text-indigo-300 opacity-90 ml-0.5">{suf}</span>}
+        <span className="flex items-baseline font-normal">
+          {pre && <span className="text-slate-400 dark:text-slate-500 mr-0.5 lowercase">{pre}</span>}
+          <span>{baseStr.replace(/^-|-$/g, '')}</span>
+          {suf && <span className="text-slate-400 dark:text-slate-500 ml-0.5 lowercase">{suf}</span>}
         </span>
       );
     }
-    return <span className="capitalize font-sans font-semibold tracking-tight">{base}</span>;
-  }, [localEntry, wordContext]);
+    return <span className="font-normal">{baseStr}</span>;
+  }, [wordContext?.text]);
+
+  const pronunciationContent = useMemo(() => {
+    const p = localEntry?.pronunciation !== 'N/A' ? localEntry?.pronunciation : null;
+    return formatWithAffixes(p);
+  }, [localEntry?.pronunciation, formatWithAffixes]);
+
+  const transliterationContent = useMemo(() => {
+    const x = localEntry?.transliteration !== 'N/A' ? localEntry?.transliteration : null;
+    const p = localEntry?.pronunciation !== 'N/A' ? localEntry?.pronunciation : null;
+    // Hide transliteration if it's identical to the pronunciation to save space
+    if (x && p && x.toLowerCase() === p.toLowerCase()) return null;
+    return formatWithAffixes(x);
+  }, [localEntry?.transliteration, localEntry?.pronunciation, formatWithAffixes]);
 
   if (!isOpen || !strongsNumber) return null;
 
   return (
-    <div className="fixed inset-0 z-100 flex items-end sm:items-center justify-center p-0 sm:p-4 animate-in fade-in duration-200 overflow-hidden">
+    <div className="fixed inset-0 z-100 flex items-end sm:items-center justify-center pt-12 sm:p-4 animate-in fade-in duration-200 overflow-hidden">
+      {/* Backdrop */}
       <div className="absolute inset-0 bg-slate-900/40 backdrop-blur-sm" onClick={onClose} />
-      <div className="bg-white dark:bg-slate-950 rounded-t-4xl sm:rounded-3xl shadow-2xl ring-1 ring-slate-200/50 dark:ring-slate-800/50 w-full sm:w-135 sm:max-w-xl h-[90vh] sm:h-auto sm:max-h-[85vh] flex flex-col relative z-10 overflow-hidden">
+      
+      {/* Modal Container */}
+      <div className="bg-white dark:bg-slate-950 rounded-t-3xl sm:rounded-3xl shadow-2xl ring-1 ring-slate-200/50 dark:ring-slate-800/50 w-full sm:w-136 sm:max-w-xl h-full max-h-[calc(100dvh-4rem)] sm:h-auto sm:max-h-[85vh] flex flex-col relative z-10 overflow-hidden">
+        
+        {/* Mobile Drag Indicator */}
+        <div className="sm:hidden w-full h-5 absolute top-0 left-0 flex items-center justify-center z-50 pointer-events-none">
+          <div className="w-12 h-1.5 bg-slate-300/50 dark:bg-slate-600/50 rounded-full" />
+        </div>
         
         <LexiconHeader 
           searchId={searchId} isGreek={isGreek} loading={loadingLocal}
           displayWord={wordContext?.text || wordContext?.root_text || localEntry?.lemma || 'Unknown'}
-          formattedPronunciation={formattedPronunciation}
+          pronunciationContent={pronunciationContent}
+          transliterationContent={transliterationContent}
           rootId={localEntry?.root_id} originId={localEntry?.origin_id}
           onClose={onClose} 
           onOriginClick={(id) => { window.dispatchEvent(new CustomEvent('lexicon-pivot', { detail: id })); }}
@@ -207,7 +228,7 @@ export const LexiconModal = ({
                 contextualMeaning={wordContext?.meaning} 
                 morphologyDetails={morphologyDetails}
                 affixAnalysis={affixAnalysis}
-                lemma={wordContext?.root_text || localEntry?.lemma} // Passing lemma for the new title
+                lemma={wordContext?.root_text || localEntry?.lemma} 
             />
           ) : activeTab === 'scholarly' ? (
             <div className="p-8 md:p-10 space-y-8 animate-in slide-in-from-bottom-4 duration-500">

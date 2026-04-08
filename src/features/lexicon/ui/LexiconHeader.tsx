@@ -7,7 +7,8 @@ interface LexiconHeaderProps {
   isGreek: boolean;
   loading: boolean;
   displayWord: string;
-  formattedPronunciation: React.ReactNode;
+  pronunciationContent?: React.ReactNode;
+  transliterationContent?: React.ReactNode;
   rootId?: string | null;
   originId?: string | null;
   onClose: () => void;
@@ -15,7 +16,7 @@ interface LexiconHeaderProps {
 }
 
 export const LexiconHeader = ({
-  searchId, isGreek, loading, displayWord, formattedPronunciation,
+  searchId, isGreek, loading, displayWord, pronunciationContent, transliterationContent,
   rootId, originId, onClose, onOriginClick
 }: LexiconHeaderProps) => {
   return (
@@ -42,10 +43,16 @@ export const LexiconHeader = ({
               {displayWord}
             </h1>
             <div className="flex flex-wrap gap-2">
-              {formattedPronunciation && (
-                <div className="inline-flex items-center gap-1.5 px-3 py-1 bg-blue-50 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400 rounded-full border border-blue-100 dark:border-blue-800/50 self-start shadow-sm">
+              {transliterationContent && (
+                <div className="inline-flex items-center gap-1.5 px-3 py-1 bg-slate-50 dark:bg-slate-900/30 text-slate-600 dark:text-slate-400 rounded-full border border-slate-100 dark:border-slate-800/50 self-start shadow-sm" title="Transliteration">
+                  <Book size={12} />
+                  <span className="text-sm sm:text-base font-normal">{transliterationContent}</span>
+                </div>
+              )}
+              {pronunciationContent && (
+                <div className="inline-flex items-center gap-1.5 px-3 py-1 bg-blue-50 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400 rounded-full border border-blue-100 dark:border-blue-800/50 self-start shadow-sm" title="Pronunciation">
                   <Volume2 size={12} />
-                  <span className="text-sm sm:text-base">{formattedPronunciation}</span>
+                  <span className="text-sm sm:text-base font-normal">{pronunciationContent}</span>
                 </div>
               )}
               {rootId && (
