@@ -2,11 +2,6 @@
 import { NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 
-// Initialize Supabase with the Service Role Key to bypass RLS for ingestion
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
-const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
-const supabase = createClient(supabaseUrl, supabaseKey);
-
 // --- Types & Helpers ---
 
 interface ProcessedText { 
@@ -47,6 +42,8 @@ interface ConsolidatedBook {
 }
 
 /**
+ * A shared state class to ensure that when we process the Hebrew text and English text 
+ * independently, they are perfectly aligned to the exact same database chapter numbers.
  * Ensures Hebrew and English maps synchronize perfectly, separating 
  * introductions (0, -1) from canonical chapters (1, 2).
  */
@@ -266,6 +263,19 @@ function extractTextMap(data: SefariaTextNode, isEnglish: boolean, isTalmud: boo
 
 // --- Streaming API Route ---
 export async function POST(request: Request) {
+  // Initialize Supabase inside the POST request to prevent build-time crashes.
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
+  const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
+  
+  if (!supabaseUrl || !supabaseKey) {
+    return new NextResponse(
+      JSON.stringify({ error: "Missing Supabase configuration." }), 
+      { status: 500, headers: { 'Content-Type': 'application/json' } }
+    );
+  }
+
+  const supabase = createClient(supabaseUrl, supabaseKey);
+
   const encoder = new TextEncoder();
   const body = await request.json() as ConsolidatedBook;
 
@@ -362,7 +372,7 @@ export async function POST(request: Request) {
           finalOrderId = (maxOrderData?.order_id || 0) + 1;
         }
 
-        // Title Fallback handling
+        // Title Fallback handling: Try Hebrew, then fallback to first valid translation title, else base title
         const finalHeTitle = heData?.heTitle || title;
 
         const { data: bookRecord, error: bookErr } = await supabase
@@ -446,11 +456,12 @@ export async function POST(request: Request) {
                 const existingId = existingVerseMap.get(vNum);
                 
                 return {
+                    // FIX: Explicitly assign a new UUID if the verse does not exist to satisfy strict DB constraints
                     id: existingId || crypto.randomUUID(),
                     chapter_id: chapId,
                     verse_number: vNum,
                     text_he: heTextObj.text,
-                    text_en: primaryEnTextObj.text, 
+                    text_en: primaryEnTextObj.text, // Legacy column acts as primary fallback
                     words: generateWordsArray(heTextObj.text, cNum, vNum)
                 };
             });
