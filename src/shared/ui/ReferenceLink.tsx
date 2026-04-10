@@ -3,7 +3,7 @@
 
 import React, { useState, useCallback, useRef, useMemo, useEffect } from 'react';
 import { createPortal } from 'react-dom';
-import { BookOpen, Loader2, Lock, Sparkles, ExternalLink, ArrowRight } from 'lucide-react';
+import { BookOpen, Loader2, Lock, ExternalLink, ArrowRight } from 'lucide-react';
 import { supabase } from '@/shared/api/supabase';
 
 interface ReferenceLinkProps {
@@ -31,7 +31,6 @@ export const ReferenceLink = ({
 }: ReferenceLinkProps) => {
   const [preview, setPreview] = useState<{ he: string; en: string } | null>(null);
   const [loading, setLoading] = useState(false);
-  const [enabling, setEnabling] = useState(false);
   const [isOpen, setIsOpen] = useState(false);
   const [mounted, setMounted] = useState(false);
   const [isTouch, setIsTouch] = useState(false);
@@ -91,26 +90,30 @@ export const ReferenceLink = ({
       const collection = bookMeta?.collection || 'Tanakh';
       setTargetCollection(collection);
 
-      if (collection === 'Tanakh') {
-        setIsRestricted(false);
-        return { restricted: false, collection };
-      }
+      const { data: colConfig } = await supabase
+        .from('collection_configs')
+        .select('visibility_status')
+        .eq('id', collection)
+        .single();
 
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) {
+      // If the collection is marked as 'coming-soon', only admins can see it
+      if (colConfig?.visibility_status === 'coming-soon') {
+        const { data: { user } } = await supabase.auth.getUser();
+        if (user) {
+          const { data: profile } = await supabase.from('profiles').select('is_admin').eq('id', user.id).single();
+          if (profile?.is_admin) {
+            setIsRestricted(false);
+            return { restricted: false, collection };
+          }
+        }
         setIsRestricted(true);
         return { restricted: true, collection };
       }
 
-      const { data: profile } = await supabase
-        .from('profiles')
-        .select('enabled_collections')
-        .eq('id', user.id)
-        .single();
-      
-      const restricted = !profile?.enabled_collections?.includes(collection);
-      setIsRestricted(restricted);
-      return { restricted, collection };
+      // If it's default or extended, it's public via the segmented control
+      setIsRestricted(false);
+      return { restricted: false, collection };
+
     } catch (err: unknown) {
       const errorMsg = err instanceof Error ? err.message : String(err);
       if ((errorMsg.includes('lock') || errorMsg.includes('stole')) && retryCount < 3) {
@@ -182,7 +185,7 @@ export const ReferenceLink = ({
     if (cssArrowLeft < 24) cssArrowLeft = 24;
     if (cssArrowLeft > tooltipWidth - 24) cssArrowLeft = tooltipWidth - 24;
 
-    const estimatedHeight = isRestricted ? 220 : 340; 
+    const estimatedHeight = isRestricted ? 180 : 340; 
     const spaceAbove = rect.top;
     const spaceBelow = viewportHeight - rect.bottom;
     
@@ -210,16 +213,14 @@ export const ReferenceLink = ({
 
   const handleInteraction = (e: React.MouseEvent | React.TouchEvent) => {
     e.stopPropagation();
-    e.preventDefault(); // Strongly prevents native link routing if wrapped in HTML <a> tags
+    e.preventDefault(); 
     
     if (isTouch) {
       if (!isOpen) {
-        // First tap: Open the preview/restricted tooltip
         updatePosition();
         setIsOpen(true);
         fetchPreview();
       } else {
-        // Second tap on the same link closes it
         setIsOpen(false);
       }
     } else {
@@ -238,25 +239,6 @@ export const ReferenceLink = ({
   const handleMouseLeave = () => {
     if (isTouch) return;
     setIsOpen(false);
-  };
-
-  const handleEnableCollection = async (e: React.MouseEvent) => {
-    e.stopPropagation();
-    setEnabling(true);
-    try {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) return;
-      const { data: profile } = await supabase.from('profiles').select('enabled_collections').eq('id', user.id).single();
-      const currentCols = profile?.enabled_collections || ['Tanakh'];
-      const updatedCols = Array.from(new Set([...currentCols, targetCollection]));
-      await supabase.from('profiles').update({ extended_library_enabled: true, enabled_collections: updatedCols, updated_at: new Date().toISOString() }).eq('id', user.id);
-      setIsRestricted(false);
-      setTimeout(fetchPreview, 50);
-    } catch (err) {
-      console.error(err);
-    } finally {
-      setEnabling(false);
-    }
   };
 
   const isGreek = useMemo(() => {
@@ -334,16 +316,11 @@ export const ReferenceLink = ({
                       <Lock size={24} />
                     </div>
                     <div>
-                      <h4 className="text-sm font-bold text-slate-900 dark:text-white">Library Access Restricted</h4>
+                      <h4 className="text-sm font-bold text-slate-900 dark:text-white">Coming Soon</h4>
                       <p className="text-xs text-slate-500 dark:text-slate-400 mt-1 leading-relaxed px-2">
-                        The <span className="font-bold text-indigo-600 dark:text-indigo-400">{targetCollection}</span> collection has not yet been enabled.
+                        The <span className="font-bold text-indigo-600 dark:text-indigo-400">{targetCollection}</span> collection is currently being processed and verified for the archive.
                       </p>
                     </div>
-                    <button onClick={handleEnableCollection} disabled={enabling} className="w-full py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-[10px] font-black uppercase tracking-widest transition-all flex items-center justify-center gap-2 shadow-lg shadow-indigo-600/20 disabled:opacity-50 active:scale-95">
-                      {enabling ? <Loader2 size={14} className="animate-spin" /> : <Sparkles size={14} />}
-                      Enable {targetCollection}
-                    </button>
-                    <p className="text-[9px] font-bold text-slate-400 uppercase tracking-tighter italic">Manage in Settings &gt; Library</p>
                   </div>
               ) : (
                 <>

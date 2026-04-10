@@ -414,7 +414,6 @@ export const ReaderPage = ({ bookName, chapterNumber, initialVerses, initialHebr
                       active={(selectedVerse?.verse_id || selectedVerse?.id) === (v.verse_id || v.id)} 
                       languageMode={languageMode} 
                       hebrewStyle={hebrewStyle} 
-                      translation={activeTranslation} 
                       onClick={() => { setSelectedVerse(v); setIsInsightsOpen(true); }}
                       onWordClick={(w) => { setSelectedStrongs(w.strongs); setSelectedWordContext(w); }} 
                       groupId={activeGroupId}

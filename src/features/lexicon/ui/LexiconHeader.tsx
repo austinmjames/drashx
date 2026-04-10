@@ -55,26 +55,40 @@ export const LexiconHeader = ({
                   <span className="text-sm sm:text-base font-normal">{pronunciationContent}</span>
                 </div>
               )}
-              {rootId && (
-                <div className="inline-flex items-center gap-1.5 px-3 py-1 bg-emerald-50 dark:bg-emerald-900/30 text-emerald-600 dark:text-emerald-400 rounded-full border border-emerald-100 dark:border-emerald-800/50 self-start shadow-sm" title={`Derived from root: ${rootId}`}>
-                  <Network size={12} />
-                  <span className="text-xs sm:text-sm font-bold uppercase tracking-wider">{rootId}</span>
-                </div>
-              )}
+              {rootId && rootId.split('+').map((rawId, idx) => {
+                const cleanId = rawId.replace(/[^A-Za-z0-9]/g, '');
+                const finalId = cleanId.startsWith('HG') ? cleanId.replace('HG', 'G') : cleanId;
+                if (!finalId) return null;
+                return (
+                  <button 
+                    key={`root-${finalId}-${idx}`}
+                    onClick={() => onOriginClick(finalId)}
+                    title={`Derived from root: ${finalId}`}
+                    aria-label={`Jump to root: ${finalId}`}
+                    className="inline-flex items-center gap-1.5 px-3 py-1 bg-emerald-50 dark:bg-emerald-900/30 text-emerald-600 dark:text-emerald-400 rounded-full border border-emerald-100 dark:border-emerald-800/50 self-start shadow-sm hover:bg-emerald-100 dark:hover:bg-emerald-900/40 transition-colors cursor-pointer"
+                  >
+                    <Network size={12} />
+                    <span className="text-xs sm:text-sm font-bold uppercase tracking-wider">Root: {finalId}</span>
+                  </button>
+                );
+              })}
               {originId && originId.split('+').map((rawId, idx) => {
                 const cleanNum = rawId.replace(/[^0-9]/g, '');
                 if (!cleanNum) return null;
                 const finalId = `H${cleanNum}`;
                 return (
                   <button 
-                    key={`${finalId}-${idx}`}
+                    key={`origin-${finalId}-${idx}`}
                     onClick={() => onOriginClick(finalId)}
-                    title={`Jump to Hebraic Term: ${finalId}`}
-                    aria-label={`Jump to Hebraic Term: ${finalId}`}
+                    title={`Jump to Hebraic origin: ${finalId}`}
+                    aria-label={`Jump to Hebraic origin: ${finalId}`}
                     className="inline-flex items-center gap-1.5 px-3 py-1 bg-amber-50 dark:bg-amber-900/30 text-amber-600 dark:text-amber-400 rounded-full border border-amber-100 dark:border-amber-800/50 self-start shadow-sm hover:bg-amber-100 dark:hover:bg-amber-900/40 transition-colors cursor-pointer" 
                   >
                     <Book size={12} />
-                    <span className="text-xs sm:text-sm font-bold uppercase tracking-wider">Hebraic Term: {finalId}</span>
+                    <span className="text-xs sm:text-sm font-bold uppercase tracking-wider flex items-center gap-1">
+                      <span className="font-hebrew text-[14px] sm:text-base leading-none translate-y-px" dir="rtl">עב</span> 
+                      <span>{finalId}</span>
+                    </span>
                   </button>
                 );
               })}

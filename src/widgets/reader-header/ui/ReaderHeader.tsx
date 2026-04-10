@@ -22,6 +22,7 @@ interface ReaderHeaderProps {
   toggleInsights: () => void;
   activeBook: string;
   activeChapter: number;
+  chapterLabel?: string | null; // For Talmudic folios/labels
   hebrewTitle: string;
   handlePrevChapter: () => void;
   handleNextChapter: () => void;
@@ -48,7 +49,8 @@ interface ReaderHeaderProps {
 export const ReaderHeader = ({
   isSidebarOpen, toggleSidebar,
   isInsightsOpen, toggleInsights,
-  activeBook, activeChapter, hebrewTitle,
+  activeBook, activeChapter, chapterLabel,
+  hebrewTitle,
   handlePrevChapter, handleNextChapter,
   languageMode, setLanguageMode,
   translation, setTranslation,
@@ -80,6 +82,9 @@ export const ReaderHeader = ({
   const lastLocation = navigationHistory.length > 0 
     ? navigationHistory[navigationHistory.length - 1] 
     : null;
+
+  // Display Logic: Priority to Folio Label (e.g., 33a)
+  const displayChapter = chapterLabel || activeChapter;
 
   return (
     <header className="flex-none z-20 px-3 md:px-6 py-3 md:py-4 bg-white/90 dark:bg-slate-950/90 backdrop-blur-xl border-b border-slate-200 dark:border-slate-800 flex items-center justify-between">
@@ -128,7 +133,7 @@ export const ReaderHeader = ({
 
         <div className="flex flex-col items-center min-w-28 md:min-w-40 text-center select-none justify-center">
           <h1 className="text-[15px] md:text-xl font-semibold text-slate-900 dark:text-white tracking-tight leading-none flex items-center gap-2">
-            {formattedBookName} {activeChapter}
+            {formattedBookName} {displayChapter}
           </h1>
           <div className="mt-0.5 md:mt-1 flex items-center gap-2">
             <div className="h-px w-1.5 md:w-2 bg-slate-200 dark:bg-slate-800" />

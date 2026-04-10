@@ -2,16 +2,16 @@
 "use client";
 
 import React, { useState } from 'react';
+import { useRouter } from 'next/navigation';
 import { HebrewVerseRenderer } from './HebrewVerseRenderer';
 import { GreekVerseRenderer } from './GreekVerseRenderer';
 import { useVerseReadStatus } from '@/features/comments/read-receipts/api/useVerseReadStatus';
+import { SmartText } from '@/shared/ui/SmartText';
+import { getVersePath } from '@/shared/lib/reference-navigation';
 
-/**
- * Converts a number to Hebrew alphabetic numerals (Gematria).
- */
 const toHebrewNumeral = (n: number): string => {
   const units = ["", "א", "ב", "ג", "ד", "ה", "ו", "ז", "ח", "ט"];
-  const tens = ["", "י", "כ", "ל", "מ", "נ", "ס", "ע", "פ", "צ"]; // Fixed 'λ' to 'ל'
+  const tens = ["", "י", "כ", "ל", "מ", "נ", "ס", "ע", "פ", "צ"]; 
   const hundreds = ["", "ק", "ר", "ש", "ת"];
   if (n === 15) return "טו";
   if (n === 16) return "טז";
@@ -23,16 +23,11 @@ const toHebrewNumeral = (n: number): string => {
   return res;
 };
 
-/**
- * Converts a number to Greek alphabetic numerals (Isopsephy).
- * Uses the Milesian system with the 'keraia' (numeral tick).
- */
 const toGreekNumeral = (n: number): string => {
   if (n <= 0 || n >= 1000) return n.toString();
   const ones = ["", "α", "β", "γ", "δ", "ε", "στ", "ζ", "η", "θ"];
   const tens = ["", "ι", "κ", "λ", "μ", "ν", "ξ", "ο", "π", "ϟ"];
   const hundreds = ["", "ρ", "σ", "τ", "υ", "φ", "χ", "ψ", "ω", "ϡ"];
-  
   let res = "";
   let num = n;
   if (num >= 100) { res += hundreds[Math.floor(num / 100)]; num %= 100; }
@@ -66,17 +61,15 @@ export interface Verse {
   text_he_no_vowels?: string;
   text_he_consonantal?: string;
   text_en?: string;
-  text_en_jps?: string;
-  text_en_modernized?: string;
   words?: VerseWord[];
   latest_comment_at?: string;
+  footnotes?: { id: string; text: string }[];
 }
 
 interface VerseCardProps {
   verse: Verse;
   active?: boolean;
   languageMode?: 'both' | 'en' | 'he';
-  translation: string; 
   hebrewStyle: 'niqqud' | 'no-niqqud';
   onClick?: () => void;
   onWordClick?: (word: VerseWord) => void;
@@ -85,55 +78,26 @@ interface VerseCardProps {
 }
 
 export const VerseCard = ({ 
-  verse, 
-  active = false, 
-  languageMode = 'both', 
-  translation,
-  hebrewStyle, 
-  onClick,
-  onWordClick,
-  groupId,
-  userId
+  verse, active = false, languageMode = 'both', 
+  hebrewStyle, onClick, onWordClick, groupId, userId
 }: VerseCardProps) => {
+  const router = useRouter();
   const [isHovered, setIsHovered] = useState(false);
   const [isOptimisticallyRead, setIsOptimisticallyRead] = useState(false);
 
   const verseId = verse.verse_id || verse.id;
   const { status, markAsRead } = useVerseReadStatus(verseId, groupId, userId);
-
   const currentStatus = isOptimisticallyRead ? (status === 'none' ? 'none' : 'read') : status;
 
   const voweled = verse.text_he_voweled || verse.text_he || "";
   const consonantal = verse.text_he_consonantal || verse.text_he_no_vowels || "";
   const displaySourceText = hebrewStyle === 'niqqud' ? voweled : (consonantal || voweled);
   const verseNumber = verse.verse_num || verse.verse_number || 0;
-  
-  // Language Detection
   const isGreekText = verse.words?.some(w => w.strongs?.startsWith('G')) ?? false;
 
-  /**
-   * Translation Hierarchy & Fallback Engine
-   */
-  const resolveEnglishText = (): string => {
-    // 1. Explicit User Override
-    if (translation !== 'default') {
-      if (translation === 'modernized' && verse.text_en_modernized?.trim()) return verse.text_en_modernized;
-      if (translation === 'jps1917' && verse.text_en_jps?.trim()) return verse.text_en_jps;
-      if (translation === 'web' && verse.text_en?.trim()) return verse.text_en;
-    }
+  // Dynamic fetching passes the correct translation securely as `text_en`
+  const displayEnglish = verse.text_en || "Translation unavailable.";
 
-    // 2. Standard Hierarchy Logic (OT: JPS -> WEB | NT: WEB -> JPS)
-    if (!isGreekText && verse.text_en_jps?.trim()) return verse.text_en_jps;
-    if (verse.text_en?.trim()) return verse.text_en; 
-    
-    // 3. Absolute Fallback
-    return verse.text_en_modernized || verse.text_en_jps || "Translation unavailable.";
-  };
-
-  const displayEnglish = resolveEnglishText();
-
-  // FIX: Lowered z-index significantly so it doesn't overlap header/modals.
-  // tooltips render in portals so they don't need the card to have a high z-index.
   const stateClasses = active 
     ? "bg-indigo-50/50 dark:bg-indigo-900/20 border-indigo-200 z-[2]" 
     : isHovered 
@@ -158,14 +122,12 @@ export const VerseCard = ({
       onMouseLeave={() => setIsHovered(false)}
       className={`p-6 border-b transition-all cursor-pointer group relative isolate ${stateClasses}`}
     >
-      {/* Unread Status */}
       {currentStatus === 'unread' && (
         <div className="absolute left-1.5 sm:left-2 top-1/2 -translate-y-1/2 px-1.5 py-0.5 bg-blue-500 dark:bg-blue-600 text-white text-[8px] font-black uppercase tracking-widest rounded shadow-sm z-10">
           New
         </div>
       )}
 
-      {/* Commentary Exists Indicator (Read or Unread) */}
       {currentStatus !== 'none' && (
         <div className={`absolute right-3 top-7 ${firstLineHeight} flex items-center transition-all duration-300 z-10`}>
           <div className="w-1.5 h-1.5 rounded-full bg-blue-400 dark:bg-blue-500/40 opacity-60" />
@@ -173,8 +135,6 @@ export const VerseCard = ({
       )}
 
       <div className="flex flex-col gap-6 px-4">
-        
-        {/* Source Text Block (Hebrew or Greek) */}
         {isHebrewVisible && (
           <div className={`flex gap-6 items-start`} dir={isGreekText ? "ltr" : "rtl"}>
             <div className={`shrink-0 min-w-8 flex items-center h-[1.8em] text-2xl ${isGreekText ? 'justify-start' : 'justify-end'}`}>
@@ -186,20 +146,9 @@ export const VerseCard = ({
             <div className="flex-1">
               {verse.words && verse.words.length > 0 ? (
                 isGreekText ? (
-                  <GreekVerseRenderer 
-                    words={verse.words} 
-                    verseTranslation={displayEnglish}
-                    onWordClick={onWordClick}
-                    size="md"
-                  />
+                  <GreekVerseRenderer words={verse.words} verseTranslation={displayEnglish} onWordClick={onWordClick} size="md" />
                 ) : (
-                  <HebrewVerseRenderer 
-                    words={verse.words} 
-                    hebrewStyle={hebrewStyle} 
-                    verseTranslation={displayEnglish}
-                    onWordClick={onWordClick}
-                    size="md"
-                  />
+                  <HebrewVerseRenderer words={verse.words} hebrewStyle={hebrewStyle} verseTranslation={displayEnglish} onWordClick={onWordClick} size="md" />
                 )
               ) : (
                 <span className="text-2xl leading-[1.8] font-serif font-normal text-slate-900 dark:text-slate-100">
@@ -210,7 +159,6 @@ export const VerseCard = ({
           </div>
         )}
 
-        {/* English Block */}
         {(languageMode === 'both' || languageMode === 'en') && (
           <div className="flex gap-6 items-start" dir="ltr">
             <div className="shrink-0 min-w-8 flex items-center justify-start h-[1.625em] text-lg">
@@ -218,10 +166,14 @@ export const VerseCard = ({
                 {verseNumber}
               </span>
             </div>
-            
-            <p className="text-lg leading-relaxed text-slate-700 dark:text-slate-300 flex-1">
-              {displayEnglish}
-            </p>
+            <div className="text-lg leading-relaxed text-slate-700 dark:text-slate-300 flex-1">
+              <SmartText 
+                text={displayEnglish} 
+                isHtml={true} 
+                footnotes={verse.footnotes}
+                onReferenceClick={(b,c,v) => router.push(getVersePath(b,c,v))}
+              />
+            </div>
           </div>
         )}
       </div>

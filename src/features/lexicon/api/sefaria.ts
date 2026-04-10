@@ -12,8 +12,9 @@ export interface SefariaDefinition {
 }
 
 export interface SefariaWordResponse {
-  word: string;
-  definitions: {
+  word?: string;
+  error?: string;
+  definitions?: {
     lookups: SefariaDefinition[];
   }[];
 }
@@ -31,8 +32,9 @@ export const fetchSefariaDefinitions = async (lemma: string): Promise<SefariaDef
 
     const data: SefariaWordResponse = await response.json();
     
-    // Flatten the nested lookup structure into a single array of definitions
-    const allDefinitions = data.definitions.flatMap(def => def.lookups);
+    // Safely flatten the nested lookup structure. 
+    // Uses optional chaining to prevent crashes if 'definitions' is undefined or an error is returned.
+    const allDefinitions = data?.definitions?.flatMap(def => def.lookups) || [];
     
     return allDefinitions;
   } catch (error) {

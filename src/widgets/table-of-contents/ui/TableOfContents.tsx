@@ -16,29 +16,36 @@ import { ChapterGrid } from './ChapterGrid';
 /**
  * Shared Types for the TOC Module
  */
+export type VisibilityStatus = 'default' | 'extended' | 'coming-soon';
 export type Chapter = { chapter_number: number };
-export type BookType = { id: string; name_en: string; category: string; collection: string; chapters: Chapter[] };
+export type BookType = { 
+  id: string; 
+  name_en: string; 
+  category: string; 
+  collection: string; 
+  chapters: Chapter[];
+  order_id: number;
+  visibility_status: VisibilityStatus;
+};
 export type ViewMode = 'collections' | 'categories' | 'books' | 'chapters';
 
-interface RawBookResponse {
-  id: string; 
-  name_en: string;
-  category: string;
-  collection?: string | null; 
-  chapters: Chapter[];
-}
+interface CollectionConfig { id: string; order_id: number; visibility_status: VisibilityStatus; }
+interface CategoryConfig { collection_id: string; name_en: string; order_id: number; visibility_status: VisibilityStatus; }
 
 interface TableOfContentsProps {
   userId?: string | null;
   groupId?: string | null;
 }
 
-let cachedBooks: BookType[] | null = null;
-
-export const CATEGORY_ORDER = [
-  'Torah', "Nevi'im", 'Ketuvim', 
-  'Gospels', 'History', 'Pauline Epistles', 'General Epistles', 'Prophecy', 'Apocalyptic'
-];
+interface RawBookData {
+  id: string;
+  name_en: string;
+  category: string;
+  collection: string;
+  order_id: number;
+  visibility_status: VisibilityStatus;
+  chapters: Chapter[];
+}
 
 export const TableOfContents = ({ userId, groupId }: TableOfContentsProps) => {
   const params = useParams();
@@ -46,194 +53,147 @@ export const TableOfContents = ({ userId, groupId }: TableOfContentsProps) => {
   const currentChapterNum = params?.chapter ? parseInt(params.chapter as string, 10) : null;
 
   // --- State ---
-  const [books, setBooks] = useState<BookType[]>(cachedBooks || []);
-  const [viewMode, setViewMode] = useState<ViewMode>('categories');
+  const [books, setBooks] = useState<BookType[]>([]);
+  const [colConfigs, setColConfigs] = useState<CollectionConfig[]>([]);
+  const [catConfigs, setCatConfigs] = useState<CategoryConfig[]>([]);
+  const [isAdmin, setIsAdmin] = useState(false);
+  
+  // Persisted Library Toggle State
+  const [showExtended, setShowExtended] = useState(false);
+
+  const [viewMode, setViewMode] = useState<ViewMode>('collections');
   const [activeCategory, setActiveCategory] = useState<string | null>(null);
   const [activeBook, setActiveBook] = useState<BookType | null>(null);
-  
-  // Ref to track synchronization and prevent "snapping back" during manual navigation
-  const lastSyncedBookRef = useRef<string | null>(null);
-  const hasInitializedPrefs = useRef(false);
-
-  const [extendedLibraryEnabled, setExtendedLibraryEnabled] = useState(false);
-  const [enabledCollections, setEnabledCollections] = useState<string[]>(['Tanakh']);
   const [activeCollection, setActiveCollection] = useState<string>('Tanakh');
+  
+  const lastSyncedBookRef = useRef<string | null>(null);
 
   const [unreadChapters, setUnreadChapters] = useState<Set<string>>(new Set());
   const [unreadBooks, setUnreadBooks] = useState<Set<string>>(new Set());
   const [unreadCategories, setUnreadCategories] = useState<Set<string>>(new Set());
   const [unreadCollections, setUnreadCollections] = useState<Set<string>>(new Set());
 
-  // --- Initial Data Fetch & URL Sync ---
-  useEffect(() => {
-    const fetchAndSync = async (retryCount = 0) => {
+  // --- 1. Persistence Logic (Memoized) ---
+  const handleToggleExtended = useCallback(async (enabled: boolean) => {
+    setShowExtended(enabled);
+    
+    // Persist to DB if user is logged in
+    if (userId) {
       try {
-        let dataToSync = cachedBooks;
-        if (!cachedBooks) {
-          const { data, error: fetchErr } = await supabase
-            .from('books')
-            .select(`id, name_en, category, chapters ( chapter_number )`)
-            .order('order_id', { ascending: true });
-          
-          if (fetchErr) throw fetchErr;
+        await supabase
+          .from('profiles')
+          .update({ 
+            extended_library_enabled: enabled,
+            updated_at: new Date().toISOString() 
+          })
+          .eq('id', userId);
+      } catch (err) {
+        console.error("Failed to persist library preference:", err);
+      }
+    }
+  }, [userId]);
 
-          const { data: collectionData, error: colErr } = await supabase.from('books').select('id, collection');
-          if (colErr) throw colErr;
+  // --- 2. Fetch Metadata & Library Structure ---
+  const fetchLibrary = useCallback(async (retryCount = 0) => {
+    try {
+      const [bookRes, colRes, catRes, profRes] = await Promise.all([
+        supabase.from('books').select('id, name_en, category, collection, order_id, visibility_status, chapters(chapter_number)').order('order_id'),
+        supabase.from('collection_configs').select('*').order('order_id'),
+        supabase.from('category_configs').select('*').order('order_id'),
+        userId ? supabase.from('profiles').select('is_admin, extended_library_enabled').eq('id', userId).single() : Promise.resolve({ data: null })
+      ]);
 
-          if (data) {
-            dataToSync = (data as unknown as RawBookResponse[]).map((b) => {
-              const colInfo = collectionData?.find(c => c.id === b.id);
-              return {
-                ...b,
-                collection: colInfo?.collection || 'Tanakh',
-                chapters: b.chapters.sort((a, c) => a.chapter_number - c.chapter_number)
-              };
-            }) as BookType[];
-            
-            cachedBooks = dataToSync;
-            setBooks(dataToSync);
-          }
-        }
+      if (bookRes.error) throw bookRes.error;
+      
+      const profData = profRes?.data;
+      setIsAdmin(!!profData?.is_admin);
+      
+      // Initialize the toggle state from user preferences
+      if (profData && profData.extended_library_enabled !== undefined) {
+        setShowExtended(profData.extended_library_enabled);
+      }
+      
+      const collections = colRes.data || [];
+      setColConfigs(collections);
+      setCatConfigs(catRes.data || []);
 
-        // SYNC LOGIC: Only force navigate to current chapter if we haven't synced this book yet
-        if (dataToSync && currentBookName && lastSyncedBookRef.current !== currentBookName) {
-          const foundBook = dataToSync.find(b => b.name_en.toLowerCase() === currentBookName.toLowerCase());
+      if (bookRes.data) {
+        const sortedBooks = (bookRes.data as unknown as RawBookData[]).map(b => ({
+          ...b,
+          chapters: b.chapters.sort((x: Chapter, y: Chapter) => x.chapter_number - y.chapter_number)
+        })) as BookType[];
+        
+        setBooks(sortedBooks);
+
+        if (currentBookName && lastSyncedBookRef.current !== currentBookName) {
+          const foundBook = sortedBooks.find(b => b.name_en.toLowerCase() === currentBookName.toLowerCase());
           if (foundBook) {
             setActiveBook(foundBook);
             setActiveCategory(foundBook.category);
-            setActiveCollection(foundBook.collection || 'Tanakh');
+            setActiveCollection(foundBook.collection);
+            
+            // Auto-enable extended view if user navigates to an extended book directly
+            const foundColConfig = collections.find(c => c.id === foundBook.collection);
+            if (foundColConfig && (foundColConfig.visibility_status === 'extended' || foundColConfig.visibility_status === 'coming-soon')) {
+              handleToggleExtended(true);
+            }
+
             lastSyncedBookRef.current = currentBookName;
             setViewMode('chapters');
           }
         }
-      } catch (err: unknown) {
-        const errorObj = err as { message?: string };
-        const errorMsg = err instanceof Error ? err.message : String(errorObj?.message || err);
-        
-        if ((errorMsg.includes('lock') || errorMsg.includes('stole') || errorMsg.includes('fetch') || errorMsg.includes('AbortError')) && retryCount < 3) {
-          const delay = Math.pow(2, retryCount) * 400 + Math.random() * 400;
-          setTimeout(() => fetchAndSync(retryCount + 1), delay);
-          return;
-        }
-        console.error("Failed to load library structure:", errorMsg);
       }
-    };
-    fetchAndSync();
-  }, [currentBookName]);
-
-  // --- Fetch User Preferences ---
-  const fetchPrefs = useCallback(async (retryCount = 0) => {
-    if (!userId) {
-      setEnabledCollections(['Tanakh']);
-      setExtendedLibraryEnabled(false);
-      return;
+    } catch {
+      if (retryCount < 3) {
+        setTimeout(() => fetchLibrary(retryCount + 1), 500);
+      }
     }
-
-    try {
-      const { data, error } = await supabase
-        .from('profiles')
-        .select('enabled_collections, extended_library_enabled')
-        .eq('id', userId)
-        .single();
-
-      if (error) throw error;
-
-      const isEnabled = data?.extended_library_enabled || false;
-      const collections = (data?.enabled_collections && data.enabled_collections.length > 0) 
-        ? data.enabled_collections 
-        : ['Tanakh'];
-
-      setExtendedLibraryEnabled(isEnabled);
-      setEnabledCollections(collections);
-      
-      // Only handle INITIAL view mode setup based on preferences.
-      // Once the component is running, we let the user manage viewMode manually.
-      if (!hasInitializedPrefs.current) {
-        if (!isEnabled) {
-          setViewMode('categories');
-        } else if (collections.length > 1 && !currentBookName) {
-          setViewMode('collections');
-        }
-        hasInitializedPrefs.current = true;
-      }
-    } catch (err: unknown) {
-      const errorObj = err as { message?: string };
-      const errorMsg = err instanceof Error ? err.message : String(errorObj?.message || err);
-      
-      if ((errorMsg.includes('lock') || errorMsg.includes('stole') || errorMsg.includes('fetch') || errorMsg.includes('AbortError')) && retryCount < 3) {
-        const delay = Math.pow(2, retryCount) * 400 + Math.random() * 400;
-        setTimeout(() => fetchPrefs(retryCount + 1), delay);
-        return;
-      }
-      console.error("Error fetching ToC preferences:", errorMsg);
-    }
-  }, [userId, currentBookName]); 
+  }, [userId, currentBookName, handleToggleExtended]);
 
   useEffect(() => {
-    fetchPrefs();
-  }, [fetchPrefs]);
+    fetchLibrary();
+  }, [fetchLibrary]);
 
-  // --- Unread Notification Logic ---
-  const fetchUnread = useCallback(async (retryCount = 0) => {
+  // --- 3. Hierarchical Filter Logic ---
+  const visibleCollections = useMemo(() => {
+    return colConfigs.filter(c => {
+      if (c.visibility_status === 'coming-soon' && !isAdmin) return false;
+      if (!showExtended) {
+        return c.visibility_status === 'default';
+      }
+      return c.visibility_status === 'default' || c.visibility_status === 'extended' || c.visibility_status === 'coming-soon';
+    }).map(c => c.id);
+  }, [colConfigs, isAdmin, showExtended]);
+
+  // --- 4. Unread Notifications ---
+  const fetchUnread = useCallback(async () => {
     if (!userId) return;
-    try {
-      const { data, error: rpcErr } = await supabase.rpc('get_unread_chapters', { 
-        p_user_id: userId, 
-        p_group_id: groupId || null 
+    const { data } = await supabase.rpc('get_unread_chapters', { p_user_id: userId, p_group_id: groupId || null });
+    if (data) {
+      const chapSet = new Set<string>();
+      const bookSet = new Set<string>();
+      data.forEach((row: { book_name: string; chapter_number: number }) => {
+        chapSet.add(`${row.book_name}-${row.chapter_number}`);
+        bookSet.add(row.book_name);
       });
+      setUnreadChapters(chapSet);
+      setUnreadBooks(bookSet);
       
-      if (rpcErr) throw rpcErr;
-
-      if (data) {
-        const chapSet = new Set<string>();
-        const bookSet = new Set<string>();
-        
-        data.forEach((row: { book_name: string, chapter_number: number }) => {
-          chapSet.add(`${row.book_name}-${row.chapter_number}`);
-          bookSet.add(row.book_name);
-        });
-        
-        setUnreadChapters(chapSet);
-        setUnreadBooks(bookSet);
-        
-        const catSet = new Set<string>();
-        const colSet = new Set<string>();
-        
-        books.forEach(b => { 
-          if (bookSet.has(b.name_en)) {
-            catSet.add(b.category); 
-            colSet.add(b.collection || 'Tanakh');
-          }
-        });
-        
-        setUnreadCategories(catSet);
-        setUnreadCollections(colSet);
-      }
-    } catch (err: unknown) {
-      const errorObj = err as { message?: string };
-      const errorMsg = err instanceof Error ? err.message : String(errorObj?.message || err);
-      
-      if ((errorMsg.includes('lock') || errorMsg.includes('stole') || errorMsg.includes('fetch') || errorMsg.includes('AbortError')) && retryCount < 3) {
-        const delay = Math.pow(2, retryCount) * 400 + Math.random() * 400;
-        setTimeout(() => fetchUnread(retryCount + 1), delay);
-        return;
-      }
-      console.error("Error fetching ToC unread data:", errorMsg);
+      const catSet = new Set<string>();
+      const colSet = new Set<string>();
+      books.forEach(b => { 
+        if (bookSet.has(b.name_en)) {
+          catSet.add(b.category); 
+          colSet.add(b.collection);
+        }
+      });
+      setUnreadCategories(catSet);
+      setUnreadCollections(colSet);
     }
   }, [userId, groupId, books]);
 
-  useEffect(() => {
-    fetchUnread();
-    if (!userId) return;
-    const receiptChannel = supabase.channel(`toc-receipts-${userId}`).on('postgres_changes', { event: '*', schema: 'public', table: 'verse_read_receipts', filter: `user_id=eq.${userId}` }, () => fetchUnread(0)).subscribe();
-    const commentsChannel = supabase.channel(`toc-comments-${groupId || 'personal'}`).on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'comments', filter: groupId ? `group_id=eq.${groupId}` : 'group_id=is.null' }, () => fetchUnread(0)).subscribe();
-    return () => { 
-      supabase.removeChannel(receiptChannel); 
-      supabase.removeChannel(commentsChannel); 
-    };
-  }, [userId, groupId, fetchUnread]);
+  useEffect(() => { fetchUnread(); }, [fetchUnread]);
 
-  // --- Handlers ---
   const handleClearNotification = async (type: 'category' | 'book' | 'chapter', value: string | number) => {
     if (!userId) return;
     if (type === 'category') setUnreadCategories(prev => { const n = new Set(prev); n.delete(value as string); return n; });
@@ -252,14 +212,9 @@ export const TableOfContents = ({ userId, groupId }: TableOfContentsProps) => {
   const handleBack = () => {
     if (viewMode === 'chapters') setViewMode('books');
     else if (viewMode === 'books') setViewMode('categories');
-    else if (viewMode === 'categories' && extendedLibraryEnabled && enabledCollections.length > 1) setViewMode('collections');
+    else if (viewMode === 'categories') setViewMode('collections');
   };
 
-  const collectionBooks = useMemo(() => 
-    books.filter(b => (b.collection || 'Tanakh') === activeCollection), 
-    [books, activeCollection]
-  );
-  
   return (
     <div className="h-full flex flex-col bg-white dark:bg-slate-950 border-r border-slate-200 dark:border-slate-800 select-none">
       <ToCHeader 
@@ -267,18 +222,41 @@ export const TableOfContents = ({ userId, groupId }: TableOfContentsProps) => {
         activeCollection={activeCollection}
         activeCategory={activeCategory}
         activeBook={activeBook}
-        enabledCollections={enabledCollections}
-        extendedLibraryEnabled={extendedLibraryEnabled}
         onBack={handleBack}
       />
 
+      {viewMode === 'collections' && (
+        <div className="px-4 pt-4 pb-2 shrink-0">
+          <div className="flex items-center justify-between p-4 bg-slate-50 dark:bg-slate-900/50 rounded-2xl border border-slate-100 dark:border-slate-800 transition-colors">
+            <div>
+              <h4 className="text-xs font-bold text-slate-900 dark:text-white flex items-center gap-2">
+                Extended Library
+              </h4>
+              <p className="text-[10px] text-slate-500 mt-0.5">Include community texts</p>
+            </div>
+            <label className="relative inline-flex items-center cursor-pointer shrink-0" title="Toggle Extended Library">
+              <input 
+                type="checkbox" 
+                className="sr-only peer" 
+                checked={showExtended}
+                onChange={(e) => handleToggleExtended(e.target.checked)}
+                aria-label="Toggle Extended Library"
+              />
+              <div className="relative w-11 h-6 bg-slate-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-indigo-500/20 rounded-full peer dark:bg-slate-700 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-0.5 after:left-0.5 after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all dark:border-slate-600 peer-checked:bg-indigo-600 shadow-inner"></div>
+            </label>
+          </div>
+        </div>
+      )}
+
       <div className="flex-1 overflow-y-auto p-4 scrollbar-hide overscroll-contain">
+        
         {viewMode === 'collections' && (
           <CollectionList 
-            collections={enabledCollections} 
-            activeCollection={activeCollection} 
+            collections={visibleCollections} 
             unreadCollections={unreadCollections} 
             books={books}
+            configs={colConfigs}
+            isAdmin={isAdmin}
             onSelect={(col) => { setActiveCollection(col); setViewMode('categories'); }}
           />
         )}
@@ -286,45 +264,48 @@ export const TableOfContents = ({ userId, groupId }: TableOfContentsProps) => {
         {viewMode === 'categories' && (
           <CategoryList 
             activeCollection={activeCollection}
-            collectionBooks={collectionBooks}
+            collectionBooks={books.filter(b => b.collection === activeCollection)}
             unreadCategories={unreadCategories}
-            onSelect={(cat) => {
+            configs={catConfigs}
+            isAdmin={isAdmin}
+            onSelect={(cat) => { 
               if (unreadCategories.has(cat)) handleClearNotification('category', cat);
-              setActiveCategory(cat); setViewMode('books');
+              setActiveCategory(cat); 
+              setViewMode('books'); 
             }}
           />
         )}
 
         {viewMode === 'books' && activeCategory && (
           <BookList 
-            books={collectionBooks.filter(b => b.category === activeCategory)}
+            books={books.filter(b => b.collection === activeCollection && b.category === activeCategory)}
             currentBookName={currentBookName}
             unreadBooks={unreadBooks}
-            onSelect={(book) => {
+            isAdmin={isAdmin}
+            onSelect={(book) => { 
               if (unreadBooks.has(book.name_en)) handleClearNotification('book', book.name_en);
-              setActiveBook(book); setViewMode('chapters');
+              setActiveBook(book); 
+              setViewMode('chapters'); 
             }}
           />
         )}
 
         {viewMode === 'chapters' && activeBook && (
-          <div className="animate-in slide-in-from-right-4 duration-300">
-            <ChapterGrid 
-              activeBook={activeBook}
-              currentBookName={currentBookName}
-              currentChapterNum={currentChapterNum}
-              unreadChapters={unreadChapters}
-              onChapterClick={(num) => {
-                if (unreadChapters.has(`${activeBook.name_en}-${num}`)) handleClearNotification('chapter', num);
-              }}
-            />
-          </div>
+          <ChapterGrid 
+            activeBook={activeBook}
+            currentBookName={currentBookName}
+            currentChapterNum={currentChapterNum}
+            unreadChapters={unreadChapters}
+            onChapterClick={(num) => {
+              if (unreadChapters.has(`${activeBook.name_en}-${num}`)) handleClearNotification('chapter', num);
+            }}
+          />
         )}
       </div>
 
       <footer className="flex-none p-6 text-center opacity-30 bg-white/50 dark:bg-slate-950/50">
          <Book className="mx-auto mb-2 text-slate-400" size={16} />
-         <p className="text-[10px] font-black uppercase tracking-[0.3em] text-slate-500">DrashX</p>
+         <p className="text-[10px] font-black uppercase tracking-[0.3em] text-slate-500">DrashX Library</p>
       </footer>
     </div>
   );

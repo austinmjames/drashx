@@ -1,7 +1,7 @@
-// Filepath: app/admin/page.tsx
+// Path: app/admin/page.tsx
 'use client';
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { ShieldAlert, ChevronDown, ChevronRight, Megaphone } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 
@@ -13,19 +13,8 @@ import { UserListWidget } from '@/widgets/admin/ui/UserListWidget';
 import { TopCommentsWidget } from '@/widgets/admin/ui/TopCommentsWidget';
 import { BroadcastWidget } from '@/widgets/admin/ui/BroadcastWidget';
 
-// --- Types ---
-interface UserStat {
-  period: string;
-  new_users: number;
-  total_users: number;
-}
-
-interface ActivityStat {
-  period: string;
-  total_comments: number;
-  total_replies: number;
-  total_likes: number;
-}
+interface UserStat { period: string; new_users: number; total_users: number; }
+interface ActivityStat { period: string; total_comments: number; total_replies: number; total_likes: number; }
 
 export interface AdminUser {
   id: string;
@@ -51,7 +40,7 @@ export interface TopComment {
   reply_count: number;
 }
 
-export default function AdminDashboardController() {
+export default function AdminPage() {
   const router = useRouter();
   const [timegrain, setTimegrain] = useState('month');
   const [topCommentsTimegrain, setTopCommentsTimegrain] = useState('all'); 
@@ -64,52 +53,59 @@ export default function AdminDashboardController() {
   const [users, setUsers] = useState<AdminUser[]>([]);
   const [topComments, setTopComments] = useState<TopComment[]>([]);
 
-  const fetchDashboardData = useCallback(async () => {
-    setLoading(true);
+  const isMountedRef = useRef(true);
+
+  useEffect(() => {
+    isMountedRef.current = true;
+    return () => { isMountedRef.current = false; };
+  }, []);
+
+  const fetchDashboardData = useCallback(async (retryCount = 0) => {
+    if (retryCount === 0) setLoading(true);
     setError(null);
 
     try {
       if (!supabase) throw new Error("Supabase client is not initialized.");
 
-      const { data: { user }, error: authError } = await supabase.auth.getUser();
-      if (authError || !user) {
-        router.push('/');
+      const { data: authData, error: authError } = await supabase.auth.getUser();
+      
+      // Explicitly throw auth errors so the catch block can intercept broken locks and retry
+      if (authError) throw authError;
+
+      if (!authData.user) {
+        if (isMountedRef.current) router.push('/');
         return;
       }
 
-      const { data: profile, error: profileError } = await supabase
+      const { data: profile } = await supabase
         .from('profiles')
         .select('is_admin')
-        .eq('id', user.id)
+        .eq('id', authData.user.id)
         .single();
 
-      if (profileError || !profile?.is_admin) {
-        router.push('/');
+      if (!profile?.is_admin) {
+        if (isMountedRef.current) router.push('/');
         return;
       }
 
-      const uStatsPromise = supabase.rpc('admin_get_user_stats', { timegrain });
-      const aStatsPromise = supabase.rpc('admin_get_activity_stats', { timegrain });
-      const uListPromise = supabase
-        .from('admin_user_list_view')
-        .select('*')
-        .order('total_interactions', { ascending: false })
-        .limit(100);
-
-      let topQuery = supabase.from('admin_top_replied_comments_view').select('*');
+      // --- Filter Logic for Top Comments ---
+      let topCommentsQuery = supabase
+        .from('admin_top_replied_comments_view')
+        .select('*');
+      
       if (topCommentsTimegrain !== 'all') {
         const d = new Date();
         if (topCommentsTimegrain === 'week') d.setDate(d.getDate() - 7);
-        if (topCommentsTimegrain === 'month') d.setDate(d.getDate() - 30);
-        if (topCommentsTimegrain === 'year') d.setDate(d.getDate() - 365);
-        topQuery = topQuery.gte('created_at', d.toISOString());
+        else if (topCommentsTimegrain === 'month') d.setDate(d.getDate() - 30);
+        else if (topCommentsTimegrain === 'year') d.setDate(d.getDate() - 365);
+        topCommentsQuery = topCommentsQuery.gte('created_at', d.toISOString());
       }
-      
-      // FIX: Changed limit from 100 to 5 for Top Comments
-      const tCommentsPromise = topQuery.order('reply_count', { ascending: false }).limit(5); 
 
       const [uStats, aStats, uList, tComments] = await Promise.all([
-        uStatsPromise, aStatsPromise, uListPromise, tCommentsPromise
+        supabase.rpc('admin_get_user_stats', { timegrain }),
+        supabase.rpc('admin_get_activity_stats', { timegrain }),
+        supabase.from('admin_user_list_view').select('*').order('total_interactions', { ascending: false }).limit(100),
+        topCommentsQuery.order('reply_count', { ascending: false }).limit(100)
       ]);
 
       if (uStats.error) throw uStats.error;
@@ -117,10 +113,13 @@ export default function AdminDashboardController() {
       if (uList.error) throw uList.error;
       if (tComments.error) throw tComments.error;
 
-      setUserStats((uStats.data as UserStat[]) || []);
-      setActivityStats((aStats.data as ActivityStat[]) || []);
-      setUsers((uList.data as AdminUser[]) || []);
-      setTopComments((tComments.data as TopComment[]) || []);
+      if (isMountedRef.current) {
+        setUserStats((uStats.data as UserStat[]) || []);
+        setActivityStats((aStats.data as ActivityStat[]) || []);
+        setUsers((uList.data as AdminUser[]) || []);
+        setTopComments((tComments.data as TopComment[]) || []);
+        setLoading(false);
+      }
 
     } catch (err: unknown) {
       console.error("Failed to fetch admin data", err);
@@ -130,14 +129,36 @@ export default function AdminDashboardController() {
         const dbErr = err as Record<string, unknown>;
         errMsg = (dbErr.message as string) || (dbErr.details as string) || JSON.stringify(err);
       }
-      setError(errMsg);
-    } finally {
-      setLoading(false);
+
+      // Catch Supabase Auth Lock errors and retry with exponential backoff
+      if ((errMsg.includes('AbortError') || errMsg.includes('Lock') || errMsg.includes('steal')) && retryCount < 4) {
+        const delay = Math.pow(2, retryCount) * 400 + Math.random() * 400;
+        setTimeout(() => {
+          if (isMountedRef.current) fetchDashboardData(retryCount + 1);
+        }, delay);
+        return;
+      }
+
+      // Quietly redirect missing sessions/JWT failures to home instead of showing a red error block
+      if (errMsg.includes('Auth session missing') || errMsg.includes('session') || errMsg.includes('JWT')) {
+        if (isMountedRef.current) router.push('/');
+        return;
+      }
+
+      if (isMountedRef.current) {
+        setError(errMsg);
+        setLoading(false);
+      }
     }
   }, [timegrain, topCommentsTimegrain, router]);
 
   useEffect(() => {
-    fetchDashboardData();
+    // Slight initial delay to prevent concurrent mount contention
+    const timer = setTimeout(() => {
+      if (isMountedRef.current) fetchDashboardData(0);
+    }, Math.random() * 200);
+
+    return () => clearTimeout(timer);
   }, [fetchDashboardData]);
 
   const handleToggleUserStatus = async (userId: string, currentStatus: boolean) => {
@@ -169,10 +190,10 @@ export default function AdminDashboardController() {
         ) : error ? (
           <div className="bg-red-50 text-red-600 p-6 rounded-xl border border-red-200 text-center shadow-sm">
             <h3 className="font-bold text-lg mb-2">Error Loading Dashboard</h3>
-            <p className="text-sm mb-4 font-mono bg-red-100 p-2 rounded inline-block">{error}</p>
-            <div className="mt-4">
-              <button onClick={fetchDashboardData} className="px-4 py-2 bg-red-100 hover:bg-red-200 text-red-700 rounded-md text-sm font-medium transition-colors">Try Again</button>
-            </div>
+            <p className="text-sm mb-4">{error}</p>
+            <button onClick={() => fetchDashboardData(0)} className="px-4 py-2 bg-red-100 hover:bg-red-200 text-red-700 rounded-md text-sm font-medium transition-colors">
+              Try Again
+            </button>
           </div>
         ) : (
           <>
@@ -198,15 +219,17 @@ export default function AdminDashboardController() {
               )}
             </div>
             
-            {/* STACKED LAYOUT: Platform Moderation then Top Comments */}
-            <div className="space-y-8">
-              <UserListWidget users={users} toggleUserStatus={handleToggleUserStatus} />
-              
-              <TopCommentsWidget 
-                topComments={topComments} 
-                timegrain={topCommentsTimegrain} 
-                setTimegrain={setTopCommentsTimegrain} 
-              />
+            <div className="grid grid-cols-1 xl:grid-cols-3 gap-8">
+              <div className="xl:col-span-2">
+                <UserListWidget users={users} toggleUserStatus={handleToggleUserStatus} />
+              </div>
+              <div>
+                <TopCommentsWidget 
+                  topComments={topComments} 
+                  timegrain={topCommentsTimegrain} 
+                  setTimegrain={setTopCommentsTimegrain} 
+                />
+              </div>
             </div>
           </>
         )}

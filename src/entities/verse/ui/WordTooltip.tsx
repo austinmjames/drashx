@@ -1,10 +1,11 @@
 // Path: src/entities/verse/ui/WordTooltip.tsx
 import React, { useState, useMemo, useEffect, useRef, useCallback } from 'react';
 import { createPortal } from 'react-dom';
-import { ArrowRight, Volume2, Book } from 'lucide-react';
+import { ArrowRight, Volume2, Book, Search, Globe } from 'lucide-react';
 import { VerseWord } from './VerseCard';
 import { supabase } from '@/shared/api/supabase';
-import { getAffixSound } from '../../../features/lexicon/lib/morphology';
+import { getAffixSound } from '@/features/lexicon/lib/morphology';
+import { fetchSefariaDefinitions } from '@/features/lexicon/api/sefaria';
 
 const PREFIX_STOP_WORDS = new Set(['and', 'the', 'a', 'an', 'of', 'to', 'in', 'on', 'with', 'for']);
 
@@ -26,26 +27,26 @@ export const WordTooltip = ({
   grammar,
   onWordClick
 }: WordTooltipProps) => {
-  const [lexiconData, setLexiconData] = useState<{ pron: string | null, xlit: string | null, shortDef: string | null } | null>(null);
+  const [lexiconData, setLexiconData] = useState<{ pron: string | null, xlit: string | null, shortDef: string | null, id: string | null, source?: string } | null>(null);
   const [isHovered, setIsHovered] = useState(false);
   const [isTouch, setIsTouch] = useState(false);
   const [coords, setCoords] = useState({ top: 0, left: 0, arrowLeft: 0, placement: initialPlacement });
   const [mounted, setMounted] = useState(false); 
+  const [isFallbackMatch, setIsFallbackMatch] = useState(false);
   
   const triggerRef = useRef<HTMLSpanElement>(null);
   const tooltipRef = useRef<HTMLDivElement>(null);
   const hasFetchedRef = useRef(false);
   const isTouchRef = useRef(false);
 
-  // Smart Device Detection: prevents touch-enabled laptops from being stuck in mobile mode.
+  const isGreek = word.strongs?.startsWith('G') || /[a-zA-Z\u0370-\u03FF]/.test(word.text);
+
+  // Smart Device Detection
   useEffect(() => {
     const timeoutId = window.setTimeout(() => {
       setMounted(true);
-      // Only default to touch mode if the device has a coarse pointer (like a finger) 
-      // AND does not have a fine pointer (like a mouse).
       const hasCoarse = window.matchMedia("(pointer: coarse)").matches;
       const hasFine = window.matchMedia("(pointer: fine)").matches;
-      
       if (hasCoarse && !hasFine) {
         setIsTouch(true);
         isTouchRef.current = true;
@@ -56,7 +57,7 @@ export const WordTooltip = ({
 
   // Dismiss tooltip when clicking outside (Fallback for Desktop)
   useEffect(() => {
-    if (!isHovered || isTouchRef.current) return; // Touch dismissal is handled by the backdrop
+    if (!isHovered || isTouchRef.current) return;
     const handleClickOutside = (e: MouseEvent) => {
       if (tooltipRef.current && !tooltipRef.current.contains(e.target as Node) && 
           triggerRef.current && !triggerRef.current.contains(e.target as Node)) {
@@ -64,122 +65,142 @@ export const WordTooltip = ({
       }
     };
     document.addEventListener('mousedown', handleClickOutside);
-    return () => {
-      document.removeEventListener('mousedown', handleClickOutside);
-    };
+    return () => document.removeEventListener('mousedown', handleClickOutside);
   }, [isHovered]);
 
   useEffect(() => {
-    // Lazy-load lexicon data ONLY when the word is hovered/touched.
-    if (!word.strongs || !isHovered || hasFetchedRef.current) return;
+    if (!isHovered || hasFetchedRef.current) return;
 
     const fetchLexicon = async () => {
       hasFetchedRef.current = true;
-      const { data } = await supabase
-        .from('lexicon')
-        .select('pronunciation, transliteration, short_def')
-        .eq('id', word.strongs)
-        .single();
       
-      if (data) {
-        setLexiconData({ 
-          pron: data.pronunciation, 
-          xlit: data.transliteration, 
-          shortDef: data.short_def 
-        });
+      // 1. PRIMARY LOOKUP (Database Strong's Number)
+      if (word.strongs && word.strongs !== 'G0' && word.strongs !== 'H0') {
+        const { data } = await supabase
+          .from('lexicon')
+          .select('id, pronunciation, transliteration, short_def')
+          .eq('id', word.strongs)
+          .single();
+        
+        if (data) {
+          setLexiconData({ id: data.id, pron: data.pronunciation, xlit: data.transliteration, shortDef: data.short_def });
+          return;
+        }
+      }
+
+      // --- FALLBACK STRATEGY ---
+      // Strip punctuation and diacritics for clean string matching
+      const cleanSearchText = word.text.replace(/[.,!?;:()"“”‘’<>··]/g, '').trim();
+
+      // 2. SEFARIA LIVE API (Hebrew Unmapped Texts)
+      if (!isGreek && cleanSearchText) {
+        const hebrewQuery = cleanSearchText.replace(/[\u0591-\u05C7]/g, ''); // Strip Niqqud
+        try {
+          const sefariaDefs = await fetchSefariaDefinitions(hebrewQuery);
+          if (sefariaDefs && sefariaDefs.length > 0) {
+            setIsFallbackMatch(true);
+            const combinedDef = sefariaDefs.slice(0, 2).map(d => d.content.replace(/<[^>]+>/g, '')).join('; ');
+            setLexiconData({
+              id: null, pron: null, xlit: null, source: 'sefaria',
+              shortDef: combinedDef || 'Sefaria matched, click for details.'
+            });
+            return;
+          }
+        } catch (e) {
+          console.error("Sefaria fallback failed", e);
+        }
+      }
+
+      // 3. LOCAL STRING MATCH (Greek Unmapped Texts like the Didache)
+      if (cleanSearchText) {
+        const localQuery = isGreek ? cleanSearchText : cleanSearchText.replace(/[\u0591-\u05C7]/g, '');
+        
+        const { data: exactMatch } = await supabase
+          .from('lexicon')
+          .select('id, pronunciation, transliteration, short_def')
+          .ilike('lemma', localQuery)
+          .limit(1)
+          .maybeSingle();
+
+        if (exactMatch) {
+          setIsFallbackMatch(true);
+          setLexiconData({ id: exactMatch.id, pron: exactMatch.pronunciation, xlit: exactMatch.transliteration, shortDef: exactMatch.short_def, source: 'local' });
+          return;
+        }
+
+        // 4. LOOSE GREEK FALLBACK (Wildcard first 4 chars to bypass inflections/suffixes)
+        if (isGreek && cleanSearchText.length > 4) {
+          const prefix = cleanSearchText.substring(0, 4);
+          const { data: looseData } = await supabase
+            .from('lexicon')
+            .select('id, pronunciation, transliteration, short_def')
+            .ilike('lemma', `${prefix}%`)
+            .limit(1)
+            .maybeSingle();
+            
+          if (looseData) {
+            setIsFallbackMatch(true);
+            setLexiconData({ id: looseData.id, pron: looseData.pronunciation, xlit: looseData.transliteration, shortDef: looseData.short_def, source: 'wildcard' });
+          }
+        }
       }
     };
     
     fetchLexicon();
-  }, [word.strongs, isHovered]);
+  }, [word.strongs, word.text, isHovered, isGreek]);
 
   const updatePosition = () => {
     if (!triggerRef.current?.parentElement) return;
-    
     const rect = triggerRef.current.parentElement.getBoundingClientRect();
     const viewportHeight = window.innerHeight;
     const viewportWidth = window.innerWidth;
-    
     const tooltipWidth = 320; 
     const tooltipHeight = 220; 
     const padding = 20;
-
+    
     const targetCenter = rect.left + (rect.width / 2);
     let left = targetCenter - (tooltipWidth / 2);
     
     if (left < padding) left = padding;
-    if (left + tooltipWidth > viewportWidth - padding) {
-      left = viewportWidth - tooltipWidth - padding;
-    }
-
+    if (left + tooltipWidth > viewportWidth - padding) left = viewportWidth - tooltipWidth - padding;
+    
     const arrowLeft = targetCenter - left;
-
     const spaceAbove = rect.top;
     const spaceBelow = viewportHeight - rect.bottom;
     const placement = (spaceBelow < tooltipHeight && spaceAbove > spaceBelow) ? 'top' : 'bottom';
-    
     const top = placement === 'top' ? rect.top - 14 : rect.bottom + 14;
-
+    
     setCoords({ top, left, arrowLeft, placement });
   };
 
-  // --- CORE NAVIGATION LOGIC ---
   const executeNavigation = () => {
     setIsHovered(false);
+    // If we found a local DB id through fallback, use it. Otherwise rely on the original word prop.
+    const finalStrongs = lexiconData?.id || word.strongs;
     if (onWordClick) {
-      onWordClick(word);
+      onWordClick({ ...word, strongs: finalStrongs });
     } else {
-      // Fallback: If the parent renderer hasn't passed the prop yet, simulate a click on the parent 
-      // span to securely trigger the legacy `onClick` event without an infinite loop.
       const parentSpan = triggerRef.current?.parentElement;
       if (parentSpan) {
           const overlay = triggerRef.current;
           if (overlay) overlay.style.pointerEvents = 'none';
           parentSpan.click();
           if (overlay) overlay.style.pointerEvents = 'auto';
-      } else {
-          window.dispatchEvent(new CustomEvent('lexicon-pivot', { detail: word.strongs }));
+      } else if (finalStrongs) {
+          window.dispatchEvent(new CustomEvent('lexicon-pivot', { detail: finalStrongs }));
       }
-    }
-  };
-
-  const handleTouchStart = () => {
-    // If the user physically touches the screen, dynamically switch to touch mode
-    if (!isTouchRef.current) {
-      isTouchRef.current = true;
-      setIsTouch(true);
     }
   };
 
   const handleInteraction = (e: React.MouseEvent | React.TouchEvent) => {
     e.stopPropagation();
     e.preventDefault(); 
-    
     if (isTouchRef.current) {
-      // Mobile: Tap to open/close tooltip
-      if (!isHovered) {
-        updatePosition();
-        setIsHovered(true);
-      } else {
-        setIsHovered(false);
-      }
+      if (!isHovered) { updatePosition(); setIsHovered(true); }
+      else setIsHovered(false);
     } else {
-      // Desktop: Click to jump directly to Lexicon
       executeNavigation();
     }
-  };
-
-  const handleMouseEnter = () => {
-    if (isTouchRef.current) return;
-    // Desktop: Hover to open tooltip
-    updatePosition();
-    setIsHovered(true);
-  };
-
-  const handleMouseLeave = () => {
-    if (isTouchRef.current) return;
-    // Desktop: Leave to close tooltip
-    setIsHovered(false);
   };
 
   const formatWithAffixes = useCallback((baseStr: string | null | undefined) => {
@@ -212,11 +233,11 @@ export const WordTooltip = ({
   const transliterationContent = useMemo(() => {
     const x = lexiconData?.xlit || word.transliteration;
     const p = lexiconData?.pron || word.pronunciation;
-    // Hide transliteration if it's identical to the pronunciation to save space
     if (x && p && x.toLowerCase() === p.toLowerCase()) return null;
     return formatWithAffixes(x);
   }, [lexiconData, word, formatWithAffixes]);
 
+  // Advanced Fuzzy Matching & Contextual Highlighting Algorithm
   const definitionItems = useMemo(() => {
     const sourceMeaning = lexiconData?.shortDef || word.meaning;
     if (!sourceMeaning) return [];
@@ -276,73 +297,64 @@ export const WordTooltip = ({
 
     return uniqueResults.sort((a, b) => b.matchLevel - a.matchLevel).slice(0, 4);
   }, [lexiconData, word.meaning, verseTranslation]);
-  
-  const isGreek = word.strongs?.startsWith('G');
+
   const arrowPlacementClasses = coords.placement === 'top' ? "-bottom-1.5 border-r border-b" : "-top-1.5 border-l border-t";
+
+  if (!mounted) return null;
 
   return (
     <>
-      {/* Invisible Interactive Overlay */}
       <span 
         ref={triggerRef} 
         className="absolute inset-0 pointer-events-auto z-10 block select-none cursor-pointer" 
         onClick={handleInteraction}
-        onTouchStart={handleTouchStart}
-        onMouseEnter={handleMouseEnter}
-        onMouseLeave={handleMouseLeave}
+        onTouchStart={() => { if (!isTouchRef.current) { isTouchRef.current = true; setIsTouch(true); } }}
+        onMouseEnter={() => { if (!isTouchRef.current) { updatePosition(); setIsHovered(true); } }}
+        onMouseLeave={() => { if (!isTouchRef.current) setIsHovered(false); }}
       />
 
-      {mounted && typeof document !== 'undefined' && createPortal(
+      {typeof document !== 'undefined' && createPortal(
         <>
-          {/* Mobile Touch Dismissal Backdrop - Safely absorbs "click-away" interactions */}
           {isHovered && isTouch && (
             <div 
               className="fixed inset-0 z-9998 cursor-pointer" 
               style={{ WebkitTapHighlightColor: 'transparent' }}
-              onClick={(e) => {
-                e.preventDefault();
-                e.stopPropagation();
-                setIsHovered(false);
-              }}
-              onTouchStart={(e) => {
-                e.stopPropagation();
-              }}
-              onTouchEnd={(e) => {
-                e.preventDefault(); // Crucial: stops iOS ghost clicks from hitting elements below
-                e.stopPropagation();
-                setIsHovered(false);
-              }}
+              onClick={(e) => { e.preventDefault(); e.stopPropagation(); setIsHovered(false); }}
+              onTouchEnd={(e) => { e.preventDefault(); e.stopPropagation(); setIsHovered(false); }}
             />
           )}
 
           <div 
             ref={tooltipRef}
-            dir="ltr"
             className="fixed z-9999 pointer-events-none transition-opacity duration-150 ease-out"
             style={{ 
-              top: coords.top, 
-              left: coords.left,
+              top: coords.top, left: coords.left,
               opacity: isHovered ? 1 : 0,
               transform: coords.placement === 'top' ? 'translateY(-100%)' : 'none',
               visibility: isHovered ? 'visible' : 'hidden'
             }}
           >
-            <div dir="ltr" className="select-none bg-white dark:bg-slate-900 text-slate-900 dark:text-white rounded-2xl shadow-2xl border border-slate-200 dark:border-slate-800 p-5 min-w-60 max-w-[85vw] sm:max-w-xs flex flex-col gap-3 shadow-indigo-500/10 pointer-events-auto">
+            <div dir="ltr" className="bg-white dark:bg-slate-900 text-slate-900 dark:text-white rounded-2xl shadow-2xl border border-slate-200 dark:border-slate-800 p-5 min-w-60 max-w-[85vw] sm:max-w-xs flex flex-col gap-3 pointer-events-auto shadow-indigo-500/10">
               
               <div className="flex items-center justify-between gap-4">
                 <span className={`text-2xl font-bold text-indigo-600 dark:text-indigo-400 ${isGreek ? 'font-serif' : 'font-hebrew'}`} dir={isGreek ? "ltr" : "rtl"}>
                   {word.text.replace(/\//g, '')}
                 </span>
                 <div className="flex flex-col items-end shrink-0">
-                  <span className="text-[10px] font-black text-slate-400 dark:text-slate-500 tracking-widest uppercase tabular-nums">{word.strongs}</span>
-                  {word.root_text && (
-                    <span className={`text-[10px] text-slate-500 dark:text-slate-400 font-bold ${isGreek ? 'font-serif' : 'font-hebrew'}`} dir={isGreek ? "ltr" : "rtl"}>
-                      {word.root_text}
+                  <span className="text-[10px] font-black text-slate-400 tracking-widest uppercase tabular-nums">{lexiconData?.id || word.strongs || '...'}</span>
+                  {isFallbackMatch && lexiconData?.source === 'sefaria' && (
+                    <span className="text-[8px] font-black bg-blue-100 dark:bg-blue-900/40 px-1 py-0.5 rounded text-blue-600 dark:text-blue-400 uppercase flex items-center gap-1 mt-1">
+                      <Globe size={8} /> Sefaria Match
+                    </span>
+                  )}
+                  {isFallbackMatch && lexiconData?.source !== 'sefaria' && (
+                    <span className="text-[8px] font-black bg-slate-100 dark:bg-slate-800 px-1 py-0.5 rounded text-slate-500 uppercase flex items-center gap-1 mt-1">
+                      <Search size={8} /> {lexiconData?.source === 'wildcard' ? 'Loose Match' : 'Exact Match'}
                     </span>
                   )}
                 </div>
               </div>
-              
+
               <div className="flex flex-wrap items-center gap-2">
                  {transliterationContent && (
                    <span className="flex items-center gap-1.5 text-sm font-sans tracking-tight capitalize text-slate-700 dark:text-slate-300 bg-slate-50 dark:bg-slate-800 px-2 py-0.5 rounded-md border border-slate-100 dark:border-slate-700/50" title="Transliteration">
@@ -360,7 +372,7 @@ export const WordTooltip = ({
 
               <div className="py-1 flex flex-wrap gap-x-2 gap-y-1.5 min-h-6">
                 {definitionItems.length === 0 ? (
-                  <p className="text-xs font-bold text-slate-400 italic">Tap word for full archive entry</p>
+                  <p className="text-xs font-bold text-slate-400 italic">Consulting the archive...</p>
                 ) : (
                   definitionItems.map((item, i) => (
                     <div key={i} className="flex items-center">
@@ -384,15 +396,14 @@ export const WordTooltip = ({
                 </div>
               )}
 
-              {/* Mobile Touch Helper Footer */}
               {isTouch && (
                 <div className="-mx-5 -mb-5 mt-3 px-5 py-3 bg-slate-50 dark:bg-slate-950 border-t border-slate-100 dark:border-slate-800 flex items-center justify-between rounded-b-2xl pointer-events-auto">
-                  <span className="text-[9px] font-bold text-slate-400 uppercase tracking-tighter leading-tight max-w-20">Tap outside to dismiss</span>
+                  <span className="text-[9px] font-bold text-slate-400 uppercase tracking-tighter">Tap outside to dismiss</span>
                   <button 
                     onClick={(e) => { e.stopPropagation(); executeNavigation(); }}
                     className="flex items-center gap-1.5 px-3 py-1.5 bg-indigo-600 text-white rounded-lg text-[10px] font-black uppercase tracking-widest hover:bg-indigo-700 transition-all shadow-md shadow-indigo-600/20 active:scale-95 shrink-0"
                   >
-                    Lexicon <ArrowRight size={12} strokeWidth={3} />
+                    More <ArrowRight size={12} strokeWidth={3} />
                   </button>
                 </div>
               )}
