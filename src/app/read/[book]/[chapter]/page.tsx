@@ -30,7 +30,7 @@ export default async function ReadChapterRoute(props: PageProps) {
   // Fetching the specific chapter record is very fast.
   const { data: chapterData, error: chapterErr } = await supabase
     .from('chapters')
-    .select('id, books!inner(name_en, name_he)')
+    .select('id, display_label, books!inner(name_en, name_he)')
     .eq('chapter_number', chapterNum)
     .ilike('books.name_en', decodedBook)
     .single();
@@ -63,6 +63,7 @@ export default async function ReadChapterRoute(props: PageProps) {
       chapterNumber={chapterNum}
       initialVerses={versesData || []}
       initialHebrewTitle={bookData.name_he}
+      initialChapterLabel={chapterData.display_label}
     />
   );
 }

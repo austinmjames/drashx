@@ -11,7 +11,7 @@ import { ReaderSettingsMenu } from '../../../features/reader/reader-settings/ui/
 
 export interface HistoryLocation {
   book: string;
-  chapter: number;
+  chapter: string | number;
   verse?: number;
 }
 
@@ -21,13 +21,13 @@ interface ReaderHeaderProps {
   isInsightsOpen: boolean;
   toggleInsights: () => void;
   activeBook: string;
-  activeChapter: number;
+  activeChapter: string | number;
   chapterLabel?: string | null; // For Talmudic folios/labels
   hebrewTitle: string;
-  handlePrevChapter: () => void;
-  handleNextChapter: () => void;
+  handlePrevChapter?: () => void;
+  handleNextChapter?: () => void;
   
-  // Settings State - Dynamically driven by the database translation architecture
+  // Settings State
   languageMode: 'both' | 'en' | 'he';
   setLanguageMode: (mode: 'both' | 'en' | 'he') => void;
   translation: string;
@@ -63,6 +63,7 @@ export const ReaderHeader = ({
   /**
    * Scholarly Formatting Utility
    * Ensures "genesis" -> "Genesis" and "i samuel" -> "I Samuel"
+   * Safely ignores trailing punctuation when checking for Roman Numerals.
    */
   const formattedBookName = useMemo(() => {
     if (!activeBook) return '';
@@ -70,9 +71,13 @@ export const ReaderHeader = ({
       .split(' ')
       .map(word => {
         const lower = word.toLowerCase();
-        // Handle Roman Numerals (I, II, III)
-        if (['i', 'ii', 'iii'].includes(lower)) return word.toUpperCase();
-        // Standard Title Case
+        // Extract just the letters to correctly identify Roman Numerals with trailing punctuation (e.g. "I;")
+        const cleanWord = lower.replace(/[^a-z]/g, '');
+        
+        if (['i', 'ii', 'iii', 'iv', 'v'].includes(cleanWord)) {
+          return word.toUpperCase();
+        }
+        
         return word.charAt(0).toUpperCase() + word.slice(1).toLowerCase();
       })
       .join(' ');
@@ -83,8 +88,11 @@ export const ReaderHeader = ({
     ? navigationHistory[navigationHistory.length - 1] 
     : null;
 
-  // Display Logic: Priority to Folio Label (e.g., 33a)
+  // Display Logic: Priority to Folio/String Label (e.g., "33a", "Title Page")
   const displayChapter = chapterLabel || activeChapter;
+  
+  // Logic to determine if we should format it as a Subtitle rather than appending it inline
+  const isTextChapter = displayChapter && isNaN(Number(displayChapter)) && !/^\d+/.test(String(displayChapter));
 
   return (
     <header className="flex-none z-20 px-3 md:px-6 py-3 md:py-4 bg-white/90 dark:bg-slate-950/90 backdrop-blur-xl border-b border-slate-200 dark:border-slate-800 flex items-center justify-between">
@@ -123,7 +131,7 @@ export const ReaderHeader = ({
       <div className="flex items-center gap-2 md:gap-8 shrink-0">
         <button 
           onClick={handlePrevChapter} 
-          disabled={activeChapter <= 1} 
+          disabled={!handlePrevChapter} 
           title="Previous Chapter"
           aria-label="Previous Chapter"
           className="p-1.5 md:p-2 rounded-full hover:bg-slate-100 dark:hover:bg-slate-800 disabled:opacity-20 active:scale-90 transition-all text-slate-400 hover:text-indigo-600"
@@ -131,13 +139,25 @@ export const ReaderHeader = ({
           <ChevronLeft className="w-5 h-5 md:w-6 md:h-6" strokeWidth={2.5} />
         </button>
 
-        <div className="flex flex-col items-center min-w-28 md:min-w-40 text-center select-none justify-center">
-          <h1 className="text-[15px] md:text-xl font-semibold text-slate-900 dark:text-white tracking-tight leading-none flex items-center gap-2">
-            {formattedBookName} {displayChapter}
-          </h1>
-          <div className="mt-0.5 md:mt-1 flex items-center gap-2">
+        <div className="flex flex-col items-center min-w-0 flex-1 px-2 text-center select-none justify-center">
+          {isTextChapter ? (
+             <div className="flex flex-col items-center justify-center w-full">
+               <h1 className="text-sm md:text-lg font-bold text-slate-900 dark:text-white tracking-tight leading-tight truncate w-full max-w-50 md:max-w-87.5">
+                 {formattedBookName}
+               </h1>
+               <h2 className="text-xs md:text-sm font-semibold text-slate-500 dark:text-slate-400 truncate w-full max-w-50 md:max-w-87.5 mt-0.5">
+                 {displayChapter}
+               </h2>
+             </div>
+          ) : (
+             <h1 className="text-[15px] md:text-xl font-semibold text-slate-900 dark:text-white tracking-tight leading-none truncate w-full max-w-50 md:max-w-87.5">
+               {formattedBookName} {displayChapter}
+             </h1>
+          )}
+          
+          <div className="mt-1 md:mt-1.5 flex items-center gap-2">
             <div className="h-px w-1.5 md:w-2 bg-slate-200 dark:bg-slate-800" />
-            <p className="text-[11px] md:text-sm font-hebrew font-medium text-slate-500 dark:text-slate-400 tracking-normal leading-none" dir="rtl">
+            <p className="text-[11px] md:text-sm font-hebrew font-medium text-slate-400 dark:text-slate-500 tracking-normal leading-none" dir="rtl">
               {hebrewTitle || '...'}
             </p>
             <div className="h-px w-1.5 md:w-2 bg-slate-200 dark:bg-slate-800" />
@@ -146,9 +166,10 @@ export const ReaderHeader = ({
 
         <button 
           onClick={handleNextChapter} 
+          disabled={!handleNextChapter}
           title="Next Chapter"
           aria-label="Next Chapter"
-          className="p-1.5 md:p-2 rounded-full hover:bg-slate-100 dark:hover:bg-slate-800 active:scale-90 transition-all text-slate-400 hover:text-indigo-600"
+          className="p-1.5 md:p-2 rounded-full hover:bg-slate-100 dark:hover:bg-slate-800 disabled:opacity-20 active:scale-90 transition-all text-slate-400 hover:text-indigo-600"
         >
           <ChevronRight className="w-5 h-5 md:w-6 md:h-6" strokeWidth={2.5} />
         </button>

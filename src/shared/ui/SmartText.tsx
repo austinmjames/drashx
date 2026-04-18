@@ -12,14 +12,14 @@ export interface FootnoteData {
 interface SmartTextProps {
   text: string;
   className?: string;
-  onReferenceClick: (book: string, chapter: number, verse: number) => void;
+  onReferenceClick: (book: string, chapter: string | number, verse: number) => void;
   isHtml?: boolean;
   referenceVariant?: 'default' | 'subtle' | 'resolved';
   hideReferenceIcon?: boolean;
   footnotes?: FootnoteData[];
 }
 
-type ReferenceClickHandler = (book: string, chapter: number, verse: number) => void;
+type ReferenceClickHandler = (book: string, chapter: string | number, verse: number) => void;
 
 const renderNodeToReact = (
   node: Node, 
@@ -86,18 +86,17 @@ const renderNodeToReact = (
       tagName = 'span';
       const size = el.getAttribute('size');
       if (size) {
-        // Map size to scalable Tailwind classes relative to the parent container
         const emMap: Record<string, string> = {
           '1': 'text-[0.75em]',
           '2': 'text-[0.875em]',
-          '3': 'text-[1em]',      // Ensures size 3 perfectly matches the parent container (text-sm)
+          '3': 'text-[1em]',
           '4': 'text-[1.25em]',
           '5': 'text-[1.5em]',
           '6': 'text-[2em]',
           '7': 'text-[3em]'
         };
         props.className = `${props.className || ''} ${emMap[size] || 'text-[1em]'}`.trim();
-        delete props['size']; // Ensure 'size' doesn't leak into the span
+        delete props['size'];
       }
     }
 
@@ -142,9 +141,6 @@ export const SmartText = ({
 }: SmartTextProps) => {
   const [isMounted, setIsMounted] = useState(false);
 
-  // Mark as mounted after initial hydration to safely use DOMParser.
-  // Wrapped in a setTimeout to defer the state update, bypassing React's 
-  // strict linter warning about triggering synchronous cascading renders in effects.
   useEffect(() => {
     const timer = setTimeout(() => {
       setIsMounted(true);
@@ -154,7 +150,6 @@ export const SmartText = ({
 
   const content = useMemo(() => {
     if (!isHtml) {
-      // Fallback for plain text parsing (Safe for SSR)
       const parts = splitTextByReferences(text);
       return parts.map((part, index) => {
         if (typeof part === 'string') return <React.Fragment key={index}>{part}</React.Fragment>;
@@ -163,7 +158,7 @@ export const SmartText = ({
           <ReferenceLink
             key={`ref-${index}-${ref.book}-${ref.chapter}-${ref.verse}`}
             book={ref.book}
-            chapter={ref.chapter}
+            chapter={ref.chapter} // Now supports string | number
             verse={ref.verse}
             label={ref.originalText}
             onClick={onReferenceClick}
@@ -176,8 +171,6 @@ export const SmartText = ({
       });
     }
 
-    // Safely parse rich text into a DOM tree and convert to React
-    // IMPORTANT: Wait for component to mount (post-hydration) before using browser APIs
     if (isMounted && typeof window !== 'undefined') {
       const parser = new DOMParser();
       const doc = parser.parseFromString(text, 'text/html');
@@ -186,8 +179,6 @@ export const SmartText = ({
       );
     }
     
-    // SSR / Initial Hydration Fallback
-    // This perfectly matches what the server sends down
     return <span dangerouslySetInnerHTML={{ __html: text }} />;
   }, [text, isHtml, onReferenceClick, referenceVariant, hideReferenceIcon, footnotes, isMounted]);
 

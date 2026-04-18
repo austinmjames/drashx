@@ -51,8 +51,17 @@ export const GreekVerseRenderer = ({
   return (
     <div className={`${fontSizeClass} text-left font-serif text-slate-900 dark:text-slate-100 flex flex-wrap gap-x-1.5 sm:gap-x-2 max-w-full relative`} dir="ltr">
       {words.map((w, index) => {
-        const displayText = w.text.replace(/<[^>]+>/g, '');
+        const cleanText = w.text.replace(/<[^>]+>/g, '');
+        
+        // Separate punctuation from the core word so it doesn't get highlighted
+        const match = cleanText.match(/^([.,!?;:()"“”‘’<>··\[\]]*)(.*?)([.,!?;:()"“”‘’<>··\[\]]*)$/);
+        const leadingPunct = match ? match[1] : '';
+        const coreWord = match ? match[2] : cleanText;
+        const trailingPunct = match ? match[3] : '';
+
+        const displayText = coreWord;
         const cleanWord = { ...w, text: displayText };
+        
         const isTargetWord = highlightStrongs && w.strongs === highlightStrongs;
         const { pos, grammar } = decodeGreekMorphology(w.morph);
         
@@ -61,21 +70,24 @@ export const GreekVerseRenderer = ({
           : "hover:bg-slate-100 dark:hover:bg-slate-800";
 
         return (
-          <span
-            key={w.id || index}
-            onMouseEnter={handleMouseEnter}
-            onClick={(e) => { if (onWordClick) { e.stopPropagation(); onWordClick(w); } }}
-            className={`relative group/word rounded-lg px-0.5 sm:px-1 transition-all inline-block hover:z-50 cursor-pointer active:scale-95 ${highlightClasses}`}
-          >
-            {displayText}
-            <WordTooltip 
-              word={cleanWord} 
-              placement={tooltipConfig.placement} 
-              align={tooltipConfig.align}
-              verseTranslation={verseTranslation} 
-              pos={pos} 
-              grammar={grammar}
-            />
+          <span key={w.id || index} className="inline-block relative whitespace-nowrap">
+            {leadingPunct}
+            <span
+              onMouseEnter={handleMouseEnter}
+              onClick={(e) => { if (onWordClick) { e.stopPropagation(); onWordClick(w); } }}
+              className={`relative group/word rounded-md px-0.5 transition-all inline-block hover:z-50 cursor-pointer active:scale-95 ${highlightClasses}`}
+            >
+              {displayText}
+              <WordTooltip 
+                word={cleanWord} 
+                placement={tooltipConfig.placement} 
+                align={tooltipConfig.align}
+                verseTranslation={verseTranslation} 
+                pos={pos} 
+                grammar={grammar}
+              />
+            </span>
+            {trailingPunct}
           </span>
         );
       })}

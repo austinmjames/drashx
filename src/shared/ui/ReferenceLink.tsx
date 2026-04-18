@@ -8,11 +8,11 @@ import { supabase } from '@/shared/api/supabase';
 
 interface ReferenceLinkProps {
   book: string;
-  chapter: number;
+  chapter: string | number;
   verse: number;
   label?: string; 
   className?: string;
-  onClick: (book: string, chapter: number, verse: number) => void;
+  onClick: (book: string, chapter: string | number, verse: number) => void;
   hidePreview?: boolean;
   variant?: 'default' | 'subtle' | 'resolved'; 
   hideIcon?: boolean; 
@@ -55,14 +55,12 @@ export const ReferenceLink = ({
 
   useEffect(() => {
     setMounted(true);
-    // Safely detect touch capabilities on mount
     if (typeof window !== 'undefined') {
       setIsTouch('ontouchstart' in window || navigator.maxTouchPoints > 0);
     }
     return () => setMounted(false);
   }, []);
 
-  // Close tooltip when clicking outside
   useEffect(() => {
     if (!isOpen) return;
     const handleClickOutside = (e: MouseEvent | TouchEvent) => {
@@ -96,9 +94,13 @@ export const ReferenceLink = ({
         .eq('id', collection)
         .single();
 
-      // If the collection is marked as 'coming-soon', only admins can see it
+      // FIX: Bypassing auth check for public/extended collections.
+      // Only fire auth request if the collection is 'coming-soon'.
+      // This prevents the "Auth Lock Stolen" error when loading pages with many references.
       if (colConfig?.visibility_status === 'coming-soon') {
-        const { data: { user } } = await supabase.auth.getUser();
+        const { data: { session } } = await supabase.auth.getSession();
+        const user = session?.user;
+        
         if (user) {
           const { data: profile } = await supabase.from('profiles').select('is_admin').eq('id', user.id).single();
           if (profile?.is_admin) {
@@ -110,14 +112,14 @@ export const ReferenceLink = ({
         return { restricted: true, collection };
       }
 
-      // If it's default or extended, it's public via the segmented control
       setIsRestricted(false);
       return { restricted: false, collection };
 
     } catch (err: unknown) {
       const errorMsg = err instanceof Error ? err.message : String(err);
-      if ((errorMsg.includes('lock') || errorMsg.includes('stole')) && retryCount < 3) {
-        const delay = Math.pow(2, retryCount) * 400 + Math.random() * 300;
+      // Exponential backoff for auth lock contention
+      if ((errorMsg.includes('lock') || errorMsg.includes('stole') || errorMsg.includes('steal')) && retryCount < 4) {
+        const delay = Math.pow(2, retryCount) * 300 + Math.random() * 200;
         await new Promise(res => setTimeout(res, delay));
         return checkAccess(retryCount + 1);
       }
@@ -132,14 +134,14 @@ export const ReferenceLink = ({
     const { restricted, collection } = await checkAccess();
     if (restricted) { setLoading(false); return; }
 
-    const slug = collection === 'Christianity' ? 'WEB' : 'JPS';
+    const slug = collection === 'Christianity' || collection === 'Second Temple' ? 'WEB' : 'JPS';
 
     try {
       const { data, error } = await supabase
         .from('reader_verses_view')
         .select('text_he, text_en')
         .eq('book_id', book)
-        .eq('chapter_num', chapter)
+        .eq('chapter_num', String(chapter))
         .eq('verse_num', verse)
         .eq('translation_slug', slug)
         .single();
@@ -151,7 +153,7 @@ export const ReferenceLink = ({
           .from('reader_verses_view')
           .select('text_he, text_en')
           .eq('book_id', book)
-          .eq('chapter_num', chapter)
+          .eq('chapter_num', String(chapter))
           .eq('verse_num', verse)
           .limit(1)
           .single();
@@ -198,7 +200,6 @@ export const ReferenceLink = ({
     });
   };
 
-  // --- CORE BACKSTACK LOGIC ---
   const executeNavigation = () => {
     if (typeof window !== 'undefined') {
       window.dispatchEvent(new CustomEvent('reader-log-history'));
@@ -224,7 +225,6 @@ export const ReferenceLink = ({
         setIsOpen(false);
       }
     } else {
-      // Desktop: Direct jump if not restricted
       if (!isRestricted) executeNavigation();
     }
   };
@@ -292,7 +292,6 @@ export const ReferenceLink = ({
         >
           <div className="relative bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 w-[320px] flex flex-col overflow-hidden pointer-events-auto shadow-[0_20px_50px_rgba(0,0,0,0.15)] dark:shadow-[0_20px_50px_rgba(0,0,0,0.4)]">
             
-            {/* Header with Nav Logic */}
             <div className="px-4 py-2.5 bg-slate-50 dark:bg-slate-950 border-b border-slate-100 dark:border-slate-800 flex items-center justify-between">
               <div className="flex items-center gap-2">
                 <BookOpen size={14} className="text-indigo-500 shrink-0" />
@@ -348,7 +347,6 @@ export const ReferenceLink = ({
               )}
             </div>
 
-            {/* Mobile Touch Helper Footer */}
             {isTouch && (
               <div className="px-4 py-2 bg-slate-50 dark:bg-slate-950 border-t border-slate-100 dark:border-slate-800 flex justify-center">
                 <span className="text-[9px] font-bold text-slate-400 uppercase tracking-tighter">Tap outside to close</span>

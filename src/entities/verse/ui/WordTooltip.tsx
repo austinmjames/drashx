@@ -73,6 +73,7 @@ export const WordTooltip = ({
 
     const fetchLexicon = async () => {
       hasFetchedRef.current = true;
+      let foundMatch = false;
       
       // 1. PRIMARY LOOKUP (Database Strong's Number)
       if (word.strongs && word.strongs !== 'G0' && word.strongs !== 'H0') {
@@ -84,17 +85,21 @@ export const WordTooltip = ({
         
         if (data) {
           setLexiconData({ id: data.id, pron: data.pronunciation, xlit: data.transliteration, shortDef: data.short_def });
+          foundMatch = true;
           return;
         }
       }
 
       // --- FALLBACK STRATEGY ---
-      // Strip punctuation and diacritics for clean string matching
-      const cleanSearchText = word.text.replace(/[.,!?;:()"“”‘’<>··]/g, '').trim();
+      // Strip punctuation, cantillation marks, and brackets for clean string matching
+      const cleanSearchText = word.text
+        .replace(/[^\p{L}\p{M}\s\-'־]/gu, '')
+        .replace(/[\u0591-\u05AF\u05BD\u05BF\u05C0\u05C4\u05C5\u05C6]/g, '')
+        .trim();
 
       // 2. SEFARIA LIVE API (Hebrew Unmapped Texts)
-      if (!isGreek && cleanSearchText) {
-        const hebrewQuery = cleanSearchText.replace(/[\u0591-\u05C7]/g, ''); // Strip Niqqud
+      if (!foundMatch && !isGreek && cleanSearchText) {
+        const hebrewQuery = cleanSearchText.replace(/[\u0591-\u05C7]/g, ''); // Strip Niqqud for straight search
         try {
           const sefariaDefs = await fetchSefariaDefinitions(hebrewQuery);
           if (sefariaDefs && sefariaDefs.length > 0) {
@@ -104,6 +109,7 @@ export const WordTooltip = ({
               id: null, pron: null, xlit: null, source: 'sefaria',
               shortDef: combinedDef || 'Sefaria matched, click for details.'
             });
+            foundMatch = true;
             return;
           }
         } catch (e) {
@@ -111,8 +117,37 @@ export const WordTooltip = ({
         }
       }
 
-      // 3. LOCAL STRING MATCH (Greek Unmapped Texts like the Didache)
-      if (cleanSearchText) {
+      // 3. WIKTIONARY API FALLBACK (Global Encyclopedia Backup for Hebrew & Greek)
+      if (!foundMatch && cleanSearchText) {
+        const searchQuery = isGreek ? cleanSearchText : cleanSearchText.replace(/[\u0591-\u05C7]/g, '');
+        try {
+          const wikiRes = await fetch(`https://en.wiktionary.org/api/rest_v1/page/definition/${encodeURIComponent(searchQuery)}`);
+          if (wikiRes.ok) {
+            const wikiData = await wikiRes.json();
+            // Wiktionary groups by language code. Greek is 'el' or 'grc' (Ancient Greek). Hebrew is 'he'.
+            const definitions = isGreek ? (wikiData.grc || wikiData.el || Object.values(wikiData)[0]) : (wikiData.he || Object.values(wikiData)[0]);
+            
+            if (definitions && Array.isArray(definitions) && definitions.length > 0) {
+               const firstDef = definitions[0].definitions?.[0]?.definition;
+               if (firstDef) {
+                   setIsFallbackMatch(true);
+                   const cleanDef = firstDef.replace(/<[^>]+>/g, '').trim();
+                   setLexiconData({
+                     id: null, pron: null, xlit: null, source: 'wiktionary',
+                     shortDef: cleanDef
+                   });
+                   foundMatch = true;
+                   return;
+               }
+            }
+          }
+        } catch (e) {
+          console.error("Wiktionary fallback failed", e);
+        }
+      }
+
+      // 4. LOCAL STRING MATCH (Loose Greek/Hebrew mapping fallback)
+      if (!foundMatch && cleanSearchText) {
         const localQuery = isGreek ? cleanSearchText : cleanSearchText.replace(/[\u0591-\u05C7]/g, '');
         
         const { data: exactMatch } = await supabase
@@ -125,24 +160,67 @@ export const WordTooltip = ({
         if (exactMatch) {
           setIsFallbackMatch(true);
           setLexiconData({ id: exactMatch.id, pron: exactMatch.pronunciation, xlit: exactMatch.transliteration, shortDef: exactMatch.short_def, source: 'local' });
+          foundMatch = true;
           return;
         }
 
-        // 4. LOOSE GREEK FALLBACK (Wildcard first 4 chars to bypass inflections/suffixes)
+        // 5. CONSONANTAL FUZZY MATCHING (Bypass Prefixes & Vowel Points)
         if (isGreek && cleanSearchText.length > 4) {
           const prefix = cleanSearchText.substring(0, 4);
           const { data: looseData } = await supabase
             .from('lexicon')
             .select('id, pronunciation, transliteration, short_def')
             .ilike('lemma', `${prefix}%`)
-            .limit(1)
-            .maybeSingle();
+            .limit(3); // Fetch potentials
             
-          if (looseData) {
+          if (looseData && looseData.length > 0) {
             setIsFallbackMatch(true);
-            setLexiconData({ id: looseData.id, pron: looseData.pronunciation, xlit: looseData.transliteration, shortDef: looseData.short_def, source: 'wildcard' });
+            const xlits = Array.from(new Set(looseData.map(d => d.transliteration).filter(Boolean))).join(' / ');
+            const prons = Array.from(new Set(looseData.map(d => d.pronunciation).filter(Boolean))).join(' / ');
+            const combinedDef = looseData.map(d => d.short_def).filter(Boolean).join(' OR ');
+
+            setLexiconData({ 
+              id: looseData[0].id, 
+              pron: prons, 
+              xlit: xlits, 
+              shortDef: looseData.length > 1 ? `Potentials: ${combinedDef}` : combinedDef, 
+              source: 'wildcard' 
+            });
+            foundMatch = true;
+          }
+        } else if (!isGreek && cleanSearchText.length > 2) {
+          // Drop the first character (often a prepositional prefix like ב, ל, מ)
+          // Inject '%' wildcards between consonants to jump over database vowel points
+          // e.g., "חלב" -> "%ח%ל%ב%"
+          const fuzzyPattern = `%${cleanSearchText.substring(1).split('').join('%')}%`;
+          
+          const { data: looseData } = await supabase
+            .from('lexicon')
+            .select('id, pronunciation, transliteration, short_def')
+            .ilike('lemma', fuzzyPattern)
+            .limit(3); // Fetch potentials
+            
+          if (looseData && looseData.length > 0) {
+            setIsFallbackMatch(true);
+            const xlits = Array.from(new Set(looseData.map(d => d.transliteration).filter(Boolean))).join(' / ');
+            const prons = Array.from(new Set(looseData.map(d => d.pronunciation).filter(Boolean))).join(' / ');
+            const combinedDef = looseData.map(d => d.short_def).filter(Boolean).join(' OR ');
+
+            setLexiconData({ 
+              id: looseData[0].id, 
+              pron: prons, 
+              xlit: xlits, 
+              shortDef: looseData.length > 1 ? `Potentials: ${combinedDef}` : combinedDef, 
+              source: 'wildcard' 
+            });
+            foundMatch = true;
           }
         }
+      }
+
+      // If absolutely no match is found, set an empty state so the UI knows we finished searching
+      if (!foundMatch) {
+        setLexiconData({ id: null, pron: null, xlit: null, shortDef: null, source: 'none' });
       }
     };
     
@@ -155,7 +233,7 @@ export const WordTooltip = ({
     const viewportHeight = window.innerHeight;
     const viewportWidth = window.innerWidth;
     const tooltipWidth = 320; 
-    const tooltipHeight = 220; 
+    const tooltipHeight = 220;
     const padding = 20;
     
     const targetCenter = rect.left + (rect.width / 2);
@@ -239,14 +317,15 @@ export const WordTooltip = ({
 
   // Advanced Fuzzy Matching & Contextual Highlighting Algorithm
   const definitionItems = useMemo(() => {
-    const sourceMeaning = lexiconData?.shortDef || word.meaning;
+    const cleanWordMeaning = word.meaning === 'Tap for scholarly analysis' ? null : word.meaning;
+    const sourceMeaning = lexiconData?.shortDef || cleanWordMeaning;
     if (!sourceMeaning) return [];
     
     const raw = sourceMeaning.replace(/<[^>]+>/g, '').replace(/\([^)]*\)/g, '');
     const parts = new Set<string>();
     
-    if (word.meaning) {
-        word.meaning.replace(/<[^>]+>/g, '').split(/[,;]/).forEach(m => {
+    if (cleanWordMeaning) {
+        cleanWordMeaning.replace(/<[^>]+>/g, '').split(/[,;]/).forEach(m => {
             const clean = m.replace(/[\[\]]/g, '').trim().toLowerCase();
             if (clean.length > 1) parts.add(clean);
         });
@@ -300,6 +379,13 @@ export const WordTooltip = ({
 
   const arrowPlacementClasses = coords.placement === 'top' ? "-bottom-1.5 border-r border-b" : "-top-1.5 border-l border-t";
 
+  // Strip punctuation and cantillation for a clean Lexicon header display
+  // Uses a strict Unicode inclusion pattern to keep only letters, marks (vowels), spaces, hyphens, and apostrophes.
+  const displayWord = word.text
+    .replace(/\//g, '')
+    .replace(/[^\p{L}\p{M}\s\-'־]/gu, '')
+    .replace(/[\u0591-\u05AF\u05BD\u05BF\u05C0\u05C4\u05C5\u05C6]/g, '');
+
   if (!mounted) return null;
 
   return (
@@ -338,7 +424,7 @@ export const WordTooltip = ({
               
               <div className="flex items-center justify-between gap-4">
                 <span className={`text-2xl font-bold text-indigo-600 dark:text-indigo-400 ${isGreek ? 'font-serif' : 'font-hebrew'}`} dir={isGreek ? "ltr" : "rtl"}>
-                  {word.text.replace(/\//g, '')}
+                  {displayWord}
                 </span>
                 <div className="flex flex-col items-end shrink-0">
                   <span className="text-[10px] font-black text-slate-400 tracking-widest uppercase tabular-nums">{lexiconData?.id || word.strongs || '...'}</span>
@@ -347,9 +433,14 @@ export const WordTooltip = ({
                       <Globe size={8} /> Sefaria Match
                     </span>
                   )}
-                  {isFallbackMatch && lexiconData?.source !== 'sefaria' && (
+                  {isFallbackMatch && lexiconData?.source === 'wiktionary' && (
+                    <span className="text-[8px] font-black bg-emerald-100 dark:bg-emerald-900/40 px-1 py-0.5 rounded text-emerald-600 dark:text-emerald-400 uppercase flex items-center gap-1 mt-1">
+                      <Book size={8} /> Fuzzy Match
+                    </span>
+                  )}
+                  {isFallbackMatch && (lexiconData?.source === 'local' || lexiconData?.source === 'wildcard') && (
                     <span className="text-[8px] font-black bg-slate-100 dark:bg-slate-800 px-1 py-0.5 rounded text-slate-500 uppercase flex items-center gap-1 mt-1">
-                      <Search size={8} /> {lexiconData?.source === 'wildcard' ? 'Loose Match' : 'Exact Match'}
+                      <Search size={8} /> {lexiconData?.source === 'wildcard' ? 'Fuzzy Match' : 'Exact Match'}
                     </span>
                   )}
                 </div>
@@ -372,7 +463,9 @@ export const WordTooltip = ({
 
               <div className="py-1 flex flex-wrap gap-x-2 gap-y-1.5 min-h-6">
                 {definitionItems.length === 0 ? (
-                  <p className="text-xs font-bold text-slate-400 italic">Consulting the archive...</p>
+                  <p className="text-xs font-bold text-slate-400 italic">
+                    {lexiconData !== null ? 'Click for advanced analysis.' : 'Consulting the archive...'}
+                  </p>
                 ) : (
                   definitionItems.map((item, i) => (
                     <div key={i} className="flex items-center">

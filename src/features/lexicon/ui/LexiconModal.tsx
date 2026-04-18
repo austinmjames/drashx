@@ -50,7 +50,7 @@ export const LexiconModal = ({
   const [loadingLocal, setLoadingLocal] = useState(true);
   const [occLoading, setOccLoading] = useState(false);
   
-  const [localEntry, setLocalEntry] = useState<(LexiconEntry & { root_id?: string | null }) | null>(null);
+  const [localEntry, setLocalEntry] = useState<(LexiconEntry & { source?: string }) | null>(null);
   const [sefariaEntries, setSefariaEntries] = useState<SefariaDefinition[]>([]);
   const [references, setReferences] = useState<ReferenceItem[]>([]);
   const [referenceCount, setReferenceCount] = useState(0);
@@ -69,6 +69,19 @@ export const LexiconModal = ({
     if (contentAreaRef.current) contentAreaRef.current.scrollTop = 0;
   }, [searchId]);
 
+  // ============================================================================
+  // AGGRESSIVE PUNCTUATION STRIPPING
+  // Ensures the Modal Header and API Searches never capture brackets or commas
+  // ============================================================================
+  const cleanDisplayWord = useMemo(() => {
+    if (!wordContext?.text) return '';
+    return wordContext.text
+      .replace(/\//g, '') // Strip internal slash dividers
+      .replace(/[^\p{L}\p{M}\s\-'־]/gu, '') // STRICT: Keep ONLY letters, vowel marks, spaces, and hyphens
+      .replace(/[\u0591-\u05AF\u05BD\u05BF\u05C0\u05C4\u05C5\u05C6]/g, '') // Strip cantillation marks
+      .trim();
+  }, [wordContext?.text]);
+
   const fetchFullData = useCallback(async () => {
     if (!searchId) return;
     setLoadingLocal(true);
@@ -79,47 +92,135 @@ export const LexiconModal = ({
       if (!isUnmappedText) {
         const { data, error } = await supabase.from('lexicon').select('*').eq('id', searchId).single();
         if (data && !error) setLocalEntry(data);
-        else setLocalEntry({ id: searchId, lemma: 'Unknown', transliteration: 'N/A', pronunciation: 'N/A', short_def: 'No definition found.', long_def: null, root_id: null });
+        else setLocalEntry({ id: searchId, lemma: 'Unknown', transliteration: 'N/A', pronunciation: 'N/A', short_def: 'No definition found.', long_def: null, root_id: null, semantic_domain: null, origin_id: null });
       } else {
         // Prepare a blank slate for the unmapped placeholder
-        setLocalEntry({ id: searchId, lemma: wordContext?.text || 'Unknown', transliteration: 'N/A', pronunciation: 'N/A', short_def: null, long_def: null, root_id: null });
+        setLocalEntry({ id: searchId, lemma: cleanDisplayWord || 'Unknown', transliteration: 'N/A', pronunciation: 'N/A', short_def: null, long_def: null, root_id: null, semantic_domain: null, origin_id: null });
       }
 
-      // 2. LIVE SEFARIA ENGINE (For Hebrew only)
-      if (!isGreek && wordContext?.text) {
-        const cleanHe = wordContext.text.replace(/[\u0591-\u05C7.,!?;:()"“”‘’<>··]/g, '').trim();
-        const sDefs = await fetchSefariaDefinitions(cleanHe);
-        
-        if (sDefs && sDefs.length > 0) {
-          setSefariaEntries(sDefs);
-          
-          // If we had no local data (because it's H0), hydrate the localEntry with Sefaria's best guess
-          if (isUnmappedText) {
-            setLocalEntry({
-              id: searchId,
-              lemma: cleanHe,
-              transliteration: 'N/A',
-              pronunciation: 'N/A',
-              short_def: sDefs[0].content.replace(/<[^>]+>/g, ''), // Strip HTML for short pill
-              long_def: null, // Left null so the Scholarly tab renders the rich Sefaria blocks instead
-              root_id: null
-            });
+      // 2. 3-TIER FALLBACK STRATEGY (For unmapped or missing words)
+      if (cleanDisplayWord && isUnmappedText) {
+        const hebrewQuery = cleanDisplayWord.replace(/[\u0591-\u05C7]/g, ''); // Strip Niqqud for live searches
+
+        // Tier A: Sefaria API (Hebrew Only)
+        if (!isGreek) {
+          try {
+            const sefariaDefs = await fetchSefariaDefinitions(hebrewQuery);
+            if (sefariaDefs && sefariaDefs.length > 0) {
+              setSefariaEntries(sefariaDefs);
+              const combinedDef = sefariaDefs[0].content.replace(/<[^>]+>/g, '');
+              
+              setLocalEntry({
+                id: searchId,
+                lemma: hebrewQuery,
+                transliteration: 'N/A',
+                pronunciation: 'N/A',
+                short_def: combinedDef,
+                long_def: null,
+                root_id: null,
+                semantic_domain: null,
+                origin_id: null,
+                source: 'sefaria'
+              });
+              
+              setLoadingLocal(false);
+              return;
+            }
+          } catch (e) {
+            console.error("Sefaria fallback failed", e);
           }
         }
-      }
 
-      // 3. GREEK FALLBACK ENGINE (For unmapped Greek text)
-      if (isGreek && isUnmappedText && wordContext?.text) {
-        const cleanGr = wordContext.text.replace(/[.,!?;:()"“”‘’<>··]/g, '').trim();
-        
-        // Try Exact Match
-        const { data: exactMatch } = await supabase.from('lexicon').select('*').ilike('lemma', cleanGr).limit(1).maybeSingle();
+        // Tier B: Wiktionary API (Global Encyclopedia Backup)
+        const searchQuery = isGreek ? cleanDisplayWord : hebrewQuery;
+        try {
+          const wikiRes = await fetch(`https://en.wiktionary.org/api/rest_v1/page/definition/${encodeURIComponent(searchQuery)}`);
+          if (wikiRes.ok) {
+            const wikiData = await wikiRes.json();
+            const definitions = isGreek ? (wikiData.grc || wikiData.el || Object.values(wikiData)[0]) : (wikiData.he || Object.values(wikiData)[0]);
+            if (definitions && Array.isArray(definitions) && definitions.length > 0) {
+              const firstDef = definitions[0].definitions?.[0]?.definition;
+              if (firstDef) {
+                setLocalEntry({ 
+                  id: 'WIKTIONARY', 
+                  lemma: cleanDisplayWord, 
+                  transliteration: 'N/A',
+                  pronunciation: 'N/A',
+                  short_def: firstDef.replace(/<[^>]+>/g, '').trim(), 
+                  long_def: null,
+                  root_id: null,
+                  semantic_domain: null,
+                  origin_id: null,
+                  source: 'wiktionary' 
+                });
+                setLoadingLocal(false);
+                return;
+              }
+            }
+          }
+        } catch (e) {
+          console.error("Wiktionary fallback failed", e);
+        }
+
+        // Tier C: Local DB String Matching
+        // Notice we use `cleanDisplayWord` (with Niqqud) for Hebrew, because the local DB 'lemma' column stores vowels.
+        const { data: exactMatch } = await supabase.from('lexicon').select('*').ilike('lemma', cleanDisplayWord).limit(1).maybeSingle();
         if (exactMatch) {
-          setLocalEntry(exactMatch); // Upgrade to a real entry!
-        } else if (cleanGr.length > 4) {
-          // Try Loose Match
-          const { data: looseMatch } = await supabase.from('lexicon').select('*').ilike('lemma', `${cleanGr.substring(0,4)}%`).limit(1).maybeSingle();
-          if (looseMatch) setLocalEntry(looseMatch);
+          setLocalEntry({ ...exactMatch, source: 'local' });
+          setLoadingLocal(false);
+          return;
+        }
+
+        // Tier D: CONSONANTAL FUZZY MATCHING (Bypass Prefixes & Vowel Points)
+        if (isGreek && cleanDisplayWord.length > 4) {
+          const prefix = cleanDisplayWord.substring(0, 4);
+          const { data: looseData } = await supabase
+            .from('lexicon')
+            .select('*')
+            .ilike('lemma', `${prefix}%`)
+            .limit(3); // Fetch potentials
+            
+          if (looseData && looseData.length > 0) {
+            const xlits = Array.from(new Set(looseData.map(d => d.transliteration).filter(Boolean))).join(' / ');
+            const prons = Array.from(new Set(looseData.map(d => d.pronunciation).filter(Boolean))).join(' / ');
+            const combinedDef = looseData.map(d => d.short_def).filter(Boolean).join(' OR ');
+
+            setLocalEntry({ 
+              ...looseData[0],
+              transliteration: xlits,
+              pronunciation: prons,
+              short_def: looseData.length > 1 ? `Potentials: ${combinedDef}` : combinedDef, 
+              source: 'wildcard' 
+            });
+            setLoadingLocal(false);
+            return;
+          }
+        } else if (!isGreek && cleanDisplayWord.length > 2) {
+          // Drop the first character (often a prepositional prefix like ב, ל, מ)
+          // Inject '%' wildcards between consonants to jump over database vowel points
+          const fuzzyPattern = `%${cleanDisplayWord.substring(1).split('').join('%')}%`;
+          
+          const { data: looseData } = await supabase
+            .from('lexicon')
+            .select('*')
+            .ilike('lemma', fuzzyPattern)
+            .limit(3); // Fetch potentials
+            
+          if (looseData && looseData.length > 0) {
+            const xlits = Array.from(new Set(looseData.map(d => d.transliteration).filter(Boolean))).join(' / ');
+            const prons = Array.from(new Set(looseData.map(d => d.pronunciation).filter(Boolean))).join(' / ');
+            const combinedDef = looseData.map(d => d.short_def).filter(Boolean).join(' OR ');
+
+            setLocalEntry({ 
+              ...looseData[0],
+              transliteration: xlits,
+              pronunciation: prons,
+              short_def: looseData.length > 1 ? `Potentials: ${combinedDef}` : combinedDef, 
+              source: 'wildcard' 
+            });
+            setLoadingLocal(false);
+            return;
+          }
         }
       }
       
@@ -128,7 +229,7 @@ export const LexiconModal = ({
     } finally { 
       setLoadingLocal(false); 
     }
-  }, [searchId, isUnmappedText, isGreek, wordContext?.text]);
+  }, [searchId, isUnmappedText, isGreek, cleanDisplayWord]);
 
   const fetchReferences = useCallback(async (page: number, append: boolean = false) => {
     if (!searchId) return;
@@ -139,9 +240,8 @@ export const LexiconModal = ({
     try {
       // If it is unmapped text, search by string match instead of Strongs!
       let filterString = `words.cs.[{"strongs":"${searchId}"}]`;
-      if (isUnmappedText && wordContext?.text) {
-         const cleanSearchText = wordContext.text.replace(/[.,!?;:()"“”‘’<>··]/g, '').trim();
-         filterString = `words.cs.[{"text":"${cleanSearchText}"}]`;
+      if (isUnmappedText && cleanDisplayWord) {
+         filterString = `words.cs.[{"text":"${cleanDisplayWord}"}]`;
       }
 
       const { data, count, error } = await supabase.from('reader_verses_view')
@@ -170,7 +270,7 @@ export const LexiconModal = ({
     } finally { 
       setOccLoading(false); 
     }
-  }, [searchId, isUnmappedText, wordContext?.text]);
+  }, [searchId, isUnmappedText, cleanDisplayWord]);
 
   useEffect(() => {
     if (isOpen && searchId) {
@@ -193,15 +293,22 @@ export const LexiconModal = ({
 
   const usagePills = useMemo(() => {
     const pills = new Map<string, string>(); 
-    if (wordContext?.meaning) {
+    // Filter out the hardcoded Sefaria placeholder so it doesn't render as a translation pill
+    if (wordContext?.meaning && wordContext.meaning !== 'Tap for scholarly analysis') {
       wordContext.meaning.split(/[,;]/).forEach(m => {
         const clean = m.replace(/[\[\]]/g, '').trim();
         if (clean.length > 1) pills.set(clean.toLowerCase(), clean);
       });
     }
     if (localEntry?.short_def) {
-      const raw = localEntry.short_def.replace(/×/g, '').replace(/\([^)]*-[^)]*\)/g, '').replace(/\([^)]*\)/g, '').replace(/\./g, ''); 
-      raw.split(',').forEach(item => {
+      // If it's a generated "Potentials:" string, strip that prefix so it parses cleanly
+      const rawDef = localEntry.short_def.startsWith('Potentials: ') 
+        ? localEntry.short_def.replace('Potentials: ', '') 
+        : localEntry.short_def;
+
+      const raw = rawDef.replace(/×/g, '').replace(/\([^)]*-[^)]*\)/g, '').replace(/\([^)]*\)/g, '').replace(/\./g, ''); 
+      // Split by OR (used in fuzzy matching) and commas
+      raw.split(/,| OR /).forEach(item => {
         const lower = item.trim().toLowerCase();
         if (lower.length > 1 && !['and', 'or', 'the', 'of', 'to', 'a', 'an'].includes(lower)) {
           if (!pills.has(lower)) pills.set(lower, item.trim());
@@ -284,7 +391,7 @@ export const LexiconModal = ({
           searchId={localEntry?.id || searchId} 
           isGreek={isGreek} 
           loading={loadingLocal}
-          displayWord={wordContext?.text || wordContext?.root_text || localEntry?.lemma || 'Unknown'}
+          displayWord={cleanDisplayWord || localEntry?.lemma || 'Unknown'}
           pronunciationContent={pronunciationContent}
           transliterationContent={transliterationContent}
           rootId={localEntry?.root_id} originId={localEntry?.origin_id}
@@ -302,7 +409,7 @@ export const LexiconModal = ({
           {activeTab === 'definition' ? (
             <DefinitionView 
                 usagePills={usagePills} 
-                contextualMeaning={wordContext?.meaning} 
+                contextualMeaning={wordContext?.meaning === 'Tap for scholarly analysis' ? null : wordContext?.meaning} 
                 morphologyDetails={morphologyDetails}
                 affixAnalysis={affixAnalysis}
                 lemma={wordContext?.root_text || localEntry?.lemma} 
@@ -346,7 +453,16 @@ export const LexiconModal = ({
               </div>
             </div>
           ) : (
-            <ReferencesTab references={references} loading={occLoading} hasMore={hasMore} referenceCount={referenceCount} loaderRef={loaderRef} highlightStrongs={searchId} onReferenceClick={(b,c,v) => router.push(getVersePath(b,c,v))} onWordClick={(w) => { window.dispatchEvent(new CustomEvent('lexicon-pivot', { detail: w.strongs })); }} />
+            <ReferencesTab 
+              references={references} 
+              loading={occLoading} 
+              hasMore={hasMore} 
+              referenceCount={referenceCount} 
+              loaderRef={loaderRef} 
+              highlightStrongs={isUnmappedText ? (isGreek ? 'G_NONE' : 'H_NONE') : searchId} 
+              onReferenceClick={(b,c,v) => router.push(getVersePath(b,c,v))} 
+              onWordClick={(w) => { window.dispatchEvent(new CustomEvent('lexicon-pivot', { detail: w.strongs })); }} 
+            />
           )}
         </div>
 

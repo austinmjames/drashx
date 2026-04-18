@@ -13,6 +13,9 @@ export const AnalysisView = ({ wordContext, isGreek }: AnalysisViewProps) => {
   // This satisfies TypeScript and prevents "possibly undefined" runtime crashes
   const { meaning, semantic_domain, variants = {} } = wordContext;
 
+  // Filter out any legacy hardcoded placeholders from the UI
+  const cleanMeaning = meaning === 'Tap for scholarly analysis' ? null : meaning;
+
   // Filter variants, strictly excluding the Documentary Hypothesis as requested
   const variantKeys = Object.keys(variants).filter(k => k !== 'doc_hyp' && variants[k]);
 
@@ -20,13 +23,13 @@ export const AnalysisView = ({ wordContext, isGreek }: AnalysisViewProps) => {
     <div className="p-8 md:p-10 space-y-10 animate-in slide-in-from-bottom-4 duration-500">
       
       {/* 1. Direct Contextual Gloss */}
-      {meaning && (
+      {cleanMeaning && (
         <section className="space-y-4">
           <h3 className="text-[10px] font-black uppercase tracking-widest text-slate-400 flex items-center gap-2">
             <Quote size={14} className="text-indigo-500" /> Contextual Translation
           </h3>
           <div className="p-5 bg-indigo-50 dark:bg-indigo-900/20 rounded-2xl border border-indigo-100 dark:border-indigo-800/30 shadow-sm">
-            <p className="text-lg font-medium text-indigo-900 dark:text-indigo-100">{meaning}</p>
+            <p className="text-lg font-medium text-indigo-900 dark:text-indigo-100">{cleanMeaning}</p>
             <p className="text-xs text-indigo-600/70 dark:text-indigo-400/70 mt-2 flex items-center gap-1.5">
               <CheckCircle2 size={12}/> Specific meaning within this verse
             </p>
@@ -80,7 +83,7 @@ export const AnalysisView = ({ wordContext, isGreek }: AnalysisViewProps) => {
       )}
 
       {/* Fallback state if no advanced data is present */}
-      {!meaning && !semantic_domain && variantKeys.length === 0 && (
+      {!cleanMeaning && !semantic_domain && variantKeys.length === 0 && (
          <div className="py-12 text-center bg-slate-50 dark:bg-slate-900/50 rounded-3xl border border-dashed border-slate-200 dark:border-slate-800">
            <FileText className="mx-auto h-8 w-8 text-slate-300 mb-4" />
            <p className="text-sm text-slate-500 italic">No advanced textual analysis available for this exact occurrence.</p>

@@ -4,15 +4,23 @@
 import React, { useState, useEffect } from 'react';
 import { 
   Library, FolderTree, Book as BookIcon, 
-  Loader2, Eye, Clock, 
+  Loader2, 
   ListOrdered, CheckCircle2, AlertCircle, Trash2, AlertTriangle, 
-  Pencil, Move
+  Pencil, Move, Plus
 } from 'lucide-react';
 import { supabase } from '@/shared/api/supabase';
 
 interface CollectionConfig { id: string; order_id: number; visibility_status: string; }
 interface CategoryConfig { id: string; collection_id: string; name_en: string; order_id: number; visibility_status: string; }
 interface BookRow { id: string; name_en: string; category: string; collection: string; order_id: number; visibility_status: string; }
+
+const getErrorMessage = (err: unknown): string => {
+  if (err instanceof Error) return err.message;
+  if (typeof err === 'object' && err !== null && 'message' in err) {
+    return String((err as Record<string, unknown>).message);
+  }
+  return String(err);
+};
 
 export const LibraryManagerView = () => {
   const [loading, setLoading] = useState(true);
@@ -21,6 +29,11 @@ export const LibraryManagerView = () => {
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editValue, setEditValue] = useState('');
+  
+  // Creation States
+  const [newColName, setNewColName] = useState('');
+  const [newCatName, setNewCatName] = useState('');
+  const [newBookName, setNewBookName] = useState('');
   
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
@@ -57,9 +70,8 @@ export const LibraryManagerView = () => {
           setLoading(false);
         }
       } catch (err: unknown) {
-        const errorMsg = err instanceof Error ? err.message : String(err);
+        const errorMsg = getErrorMessage(err);
         
-        // Catch Supabase Auth Lock errors and retry with exponential backoff
         if ((errorMsg.includes('AbortError') || errorMsg.includes('Lock broken') || errorMsg.includes('steal')) && retryCount < 3) {
           const delay = Math.pow(2, retryCount) * 500 + Math.random() * 500;
           setTimeout(() => {
@@ -70,13 +82,12 @@ export const LibraryManagerView = () => {
 
         console.error("Error fetching library management data:", err);
         if (isMounted) {
-          setError("Failed to load library management data.");
+          setError(`Failed to load library data: ${errorMsg}`);
           setLoading(false);
         }
       }
     };
 
-    // Slight initial delay to prevent concurrent mount contention
     const timer = setTimeout(() => {
       if (isMounted) fetchData(0);
     }, Math.random() * 200);
@@ -86,6 +97,79 @@ export const LibraryManagerView = () => {
       clearTimeout(timer);
     };
   }, []);
+
+  const handleAddCollection = async (e?: React.KeyboardEvent | React.MouseEvent) => {
+    if (e && 'key' in e && e.key !== 'Enter') return;
+    const val = newColName.trim();
+    if (!val) return;
+    
+    setSaving('new-col');
+    try {
+      const maxOrder = collections.reduce((max, c) => Math.max(max, c.order_id || 0), 0);
+      const newCol = { id: val, order_id: maxOrder + 1, visibility_status: 'coming-soon' };
+      const { data, error: err } = await supabase.from('collection_configs').insert(newCol).select().single();
+      if (err) throw err;
+      setCollections(prev => [...prev, data as CollectionConfig]);
+      setNewColName('');
+      setSuccess("Collection created.");
+      setTimeout(() => setSuccess(null), 2000);
+    } catch (err: unknown) {
+      setError(getErrorMessage(err));
+    } finally {
+      setSaving(null);
+    }
+  };
+
+  const handleAddCategory = async (e?: React.KeyboardEvent | React.MouseEvent) => {
+    if (e && 'key' in e && e.key !== 'Enter') return;
+    if (!selectedCol) return;
+    const val = newCatName.trim();
+    if (!val) return;
+    
+    setSaving('new-cat');
+    try {
+      const catList = categories.filter(c => c.collection_id === selectedCol);
+      const maxOrder = catList.reduce((max, c) => Math.max(max, c.order_id || 0), 0);
+      const newCat = { collection_id: selectedCol, name_en: val, order_id: maxOrder + 1, visibility_status: 'coming-soon' };
+      const { data, error: err } = await supabase.from('category_configs').insert(newCat).select().single();
+      if (err) throw err;
+      setCategories(prev => [...prev, data as CategoryConfig]);
+      setNewCatName('');
+      setSuccess("Category created.");
+      setTimeout(() => setSuccess(null), 2000);
+    } catch (err: unknown) {
+      setError(getErrorMessage(err));
+    } finally {
+      setSaving(null);
+    }
+  };
+
+  const handleAddBook = async (e?: React.KeyboardEvent | React.MouseEvent) => {
+    if (e && 'key' in e && e.key !== 'Enter') return;
+    if (!selectedCol || !selectedCat) return;
+    const val = newBookName.trim();
+    if (!val) return;
+    
+    const catObj = categories.find(c => c.id === selectedCat);
+    if (!catObj) return;
+
+    setSaving('new-book');
+    try {
+      const bookList = books.filter(b => b.collection === selectedCol && b.category === catObj.name_en);
+      const maxOrder = bookList.reduce((max, b) => Math.max(max, b.order_id || 0), 0);
+      const newBook = { name_en: val, name_he: val, category: catObj.name_en, collection: selectedCol, order_id: maxOrder + 1, visibility_status: 'coming-soon' };
+      const { data, error: err } = await supabase.from('books').insert(newBook).select().single();
+      if (err) throw err;
+      setBooks(prev => [...prev, data as BookRow]);
+      setNewBookName('');
+      setSuccess("Book created.");
+      setTimeout(() => setSuccess(null), 2000);
+    } catch (err: unknown) {
+      setError(getErrorMessage(err));
+    } finally {
+      setSaving(null);
+    }
+  };
 
   const handleRename = async (type: 'col' | 'cat' | 'book', id: string) => {
     const newValue = editValue.trim();
@@ -119,7 +203,7 @@ export const LibraryManagerView = () => {
       setEditingId(null);
       setTimeout(() => setSuccess(null), 2000);
     } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : String(err));
+      setError(getErrorMessage(err));
     } finally {
       setSaving(null);
     }
@@ -134,7 +218,6 @@ export const LibraryManagerView = () => {
       const { error: err } = await supabase.from('category_configs').update({ collection_id: newCollectionId }).eq('id', catId);
       if (err) throw err;
       
-      // Also move all books in this category to the new collection
       const { error: bookErr } = await supabase.from('books')
         .update({ collection: newCollectionId })
         .eq('collection', catToMove.collection_id)
@@ -146,11 +229,11 @@ export const LibraryManagerView = () => {
       
       setSuccess("Category moved.");
       if (selectedCat === catId && selectedCol !== newCollectionId) {
-          setSelectedCat(null); // Deselect if moved out of current view
+          setSelectedCat(null); 
       }
       setTimeout(() => setSuccess(null), 2000);
     } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : String(err));
+      setError(getErrorMessage(err));
     } finally {
       setSaving(null);
     }
@@ -165,7 +248,7 @@ export const LibraryManagerView = () => {
       setSuccess("Book moved.");
       setTimeout(() => setSuccess(null), 2000);
     } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : String(err));
+      setError(getErrorMessage(err));
     } finally {
       setSaving(null);
     }
@@ -194,7 +277,7 @@ export const LibraryManagerView = () => {
       setConfirmDelete(null);
       setTimeout(() => setSuccess(null), 2000);
     } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : String(err));
+      setError(getErrorMessage(err));
     } finally {
       setDeleting(null);
     }
@@ -214,7 +297,7 @@ export const LibraryManagerView = () => {
       setSuccess(`Updated status.`);
       setTimeout(() => setSuccess(null), 2000);
     } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : String(err));
+      setError(getErrorMessage(err));
     } finally {
       setSaving(null);
     }
@@ -232,31 +315,31 @@ export const LibraryManagerView = () => {
       if (type === 'cat') setCategories(prev => prev.map(c => c.id === id ? { ...c, order_id: orderId } : c).sort((a,b) => a.order_id - b.order_id));
       if (type === 'book') setBooks(prev => prev.map(b => b.id === id ? { ...b, order_id: orderId } : b).sort((a,b) => a.order_id - b.order_id));
     } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : String(err));
+      setError(getErrorMessage(err));
     } finally {
       setSaving(null);
     }
   };
 
-  const StatusPill = ({ status, onToggle }: { status: string, onToggle: (s: string) => void }) => {
-    const config: Record<string, { icon: React.ElementType, color: string, label: string }> = {
-      'default': { icon: Eye, color: 'bg-emerald-100 text-emerald-700', label: 'Default' },
-      'extended': { icon: FolderTree, color: 'bg-indigo-100 text-indigo-700', label: 'Extended' },
-      'coming-soon': { icon: Clock, color: 'bg-amber-100 text-amber-700', label: 'Soon' }
+  const StatusDropdown = ({ status, onToggle }: { status: string, onToggle: (s: string) => void }) => {
+    const config: Record<string, { color: string }> = {
+      'default': { color: 'bg-emerald-100 text-emerald-700 border-emerald-200' },
+      'extended': { color: 'bg-indigo-100 text-indigo-700 border-indigo-200' },
+      'coming-soon': { color: 'bg-amber-100 text-amber-700 border-amber-200' }
     };
-    const c = config[status] || config['extended'];
-    const Icon = c.icon;
+    const c = config[status] || config['coming-soon'];
+    
     return (
-      <button 
-        onClick={() => {
-          const next = status === 'default' ? 'extended' : status === 'extended' ? 'coming-soon' : 'default';
-          onToggle(next);
-        }}
-        title={`Change visibility status from ${status}`}
-        className={`flex items-center gap-1.5 px-2 py-1 rounded-lg text-[10px] font-black uppercase tracking-wider transition-all border border-transparent hover:border-current ${c.color}`}
+      <select
+        value={status}
+        onChange={(e) => onToggle(e.target.value)}
+        title="Visibility Status"
+        className={`px-2 py-1 rounded-lg text-[10px] font-black uppercase tracking-wider outline-none cursor-pointer border transition-all ${c.color}`}
       >
-        <Icon size={10} strokeWidth={3} /> {c.label}
-      </button>
+        <option value="coming-soon">Coming Soon</option>
+        <option value="extended">Extended Library</option>
+        <option value="default">Default</option>
+      </select>
     );
   };
 
@@ -268,6 +351,21 @@ export const LibraryManagerView = () => {
       {/* 1. COLLECTIONS */}
       <div className="lg:col-span-3 flex flex-col gap-3">
         <h3 className="text-[10px] font-black uppercase tracking-widest text-slate-400 flex items-center gap-2 px-2"><Library size={12}/> Collections</h3>
+        
+        <div className="flex items-center gap-2 px-1 mb-1">
+          <input
+            type="text"
+            placeholder="New Collection..."
+            value={newColName}
+            onChange={e => setNewColName(e.target.value)}
+            onKeyDown={handleAddCollection}
+            className="w-full bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg px-3 py-1.5 text-sm font-bold outline-none focus:border-indigo-500 transition-colors"
+          />
+          <button onClick={handleAddCollection} title="Add Collection" className="p-1.5 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors shadow-sm">
+            <Plus size={16}/>
+          </button>
+        </div>
+
         <div className="space-y-2 overflow-y-auto max-h-[60vh] pr-2 scrollbar-hide">
           {collections.map(col => (
             <div key={col.id} className={`p-4 rounded-2xl border transition-all flex flex-col gap-4 ${selectedCol === col.id ? 'bg-white dark:bg-slate-900 border-indigo-500 shadow-lg' : 'bg-slate-50 dark:bg-slate-900/40 border-slate-200 dark:border-slate-800'}`}>
@@ -327,7 +425,7 @@ export const LibraryManagerView = () => {
                       <Trash2 size={12}/>
                     </button>
                    )}
-                   <StatusPill status={col.visibility_status} onToggle={(s) => updateStatus('col', col.id, s)} />
+                   <StatusDropdown status={col.visibility_status} onToggle={(s) => updateStatus('col', col.id, s)} />
                 </div>
               </div>
               <div className="flex items-center gap-2 pt-3 border-t border-slate-100 dark:border-slate-800/50">
@@ -350,6 +448,22 @@ export const LibraryManagerView = () => {
       {/* 2. CATEGORIES */}
       <div className="lg:col-span-4 flex flex-col gap-3 border-x border-slate-100 dark:border-slate-900 px-4">
         <h3 className="text-[10px] font-black uppercase tracking-widest text-slate-400 flex items-center gap-2 px-2"><FolderTree size={12}/> Categories</h3>
+        
+        <div className="flex items-center gap-2 px-1 mb-1">
+          <input
+            type="text"
+            placeholder="New Category..."
+            value={newCatName}
+            onChange={e => setNewCatName(e.target.value)}
+            onKeyDown={handleAddCategory}
+            disabled={!selectedCol}
+            className="w-full bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg px-3 py-1.5 text-sm font-bold outline-none focus:border-indigo-500 transition-colors disabled:opacity-50"
+          />
+          <button onClick={handleAddCategory} disabled={!selectedCol} title="Add Category" className="p-1.5 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors shadow-sm disabled:opacity-50">
+            <Plus size={16}/>
+          </button>
+        </div>
+
         <div className="space-y-2 overflow-y-auto max-h-[60vh] pr-2 scrollbar-hide">
           {!selectedCol ? (
             <div className="h-40 flex items-center justify-center text-slate-400 text-xs italic text-center opacity-50">Select collection.</div>
@@ -411,7 +525,7 @@ export const LibraryManagerView = () => {
                       <Trash2 size={12}/>
                     </button>
                    )}
-                   <StatusPill status={cat.visibility_status} onToggle={(s) => updateStatus('cat', cat.id, s)} />
+                   <StatusDropdown status={cat.visibility_status} onToggle={(s) => updateStatus('cat', cat.id, s)} />
                 </div>
               </div>
 
@@ -451,6 +565,22 @@ export const LibraryManagerView = () => {
       {/* 3. BOOKS */}
       <div className="lg:col-span-5 flex flex-col gap-3">
         <h3 className="text-[10px] font-black uppercase tracking-widest text-slate-400 flex items-center gap-2 px-2"><BookIcon size={12}/> Books</h3>
+        
+        <div className="flex items-center gap-2 px-1 mb-1">
+          <input
+            type="text"
+            placeholder="New Book..."
+            value={newBookName}
+            onChange={e => setNewBookName(e.target.value)}
+            onKeyDown={handleAddBook}
+            disabled={!selectedCat}
+            className="w-full bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg px-3 py-1.5 text-sm font-bold outline-none focus:border-indigo-500 transition-colors disabled:opacity-50"
+          />
+          <button onClick={handleAddBook} disabled={!selectedCat} title="Add Book" className="p-1.5 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors shadow-sm disabled:opacity-50">
+            <Plus size={16}/>
+          </button>
+        </div>
+
         <div className="space-y-2 overflow-y-auto max-h-[60vh] pr-2 scrollbar-hide">
           {!selectedCat ? (
             <div className="h-40 flex items-center justify-center text-slate-400 text-xs italic text-center opacity-50">Select category.</div>
@@ -507,7 +637,7 @@ export const LibraryManagerView = () => {
                         <Trash2 size={12}/>
                       </button>
                     )}
-                    <StatusPill status={book.visibility_status} onToggle={(s) => updateStatus('book', book.id, s)} />
+                    <StatusDropdown status={book.visibility_status} onToggle={(s) => updateStatus('book', book.id, s)} />
                   </div>
                 </div>
                 

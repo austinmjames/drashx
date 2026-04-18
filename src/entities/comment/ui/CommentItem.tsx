@@ -34,6 +34,12 @@ export interface Comment {
   group?: { name: string } | { name: string }[] | null;
 }
 
+export interface HistoryLocation {
+  book: string;
+  chapter: string | number; // UPDATED: Supports text-based chapters
+  verse?: number;
+}
+
 interface CommentItemProps {
   comment: Comment;
   currentUserId?: string;

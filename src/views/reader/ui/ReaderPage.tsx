@@ -28,6 +28,25 @@ const ProfileSettings = dynamic(() =>
 
 let globalIsSidebarOpen = true;
 
+const VerseSkeleton = () => (
+  <div className="p-6 border-b border-slate-100 dark:border-slate-800 animate-pulse flex flex-col gap-6">
+    <div className="flex gap-6 items-start" dir="rtl">
+      <div className="w-8 h-6 bg-slate-200 dark:bg-slate-800 rounded shrink-0"></div>
+      <div className="flex-1 space-y-3">
+        <div className="h-4 bg-slate-200 dark:bg-slate-800 rounded w-full"></div>
+        <div className="h-4 bg-slate-200 dark:bg-slate-800 rounded w-5/6"></div>
+      </div>
+    </div>
+    <div className="flex gap-6 items-start" dir="ltr">
+      <div className="w-8 h-6 bg-slate-200 dark:bg-slate-800 rounded shrink-0"></div>
+      <div className="flex-1 space-y-3">
+        <div className="h-4 bg-slate-200 dark:bg-slate-800 rounded w-full"></div>
+        <div className="h-4 bg-slate-200 dark:bg-slate-800 rounded w-4/5"></div>
+      </div>
+    </div>
+  </div>
+);
+
 // --- Types ---
 interface Group { id: string; name: string; icon_url?: string; color_theme?: string; }
 interface GroupMemberJoin { group_id: string; groups: Group | Group[]; }
@@ -37,29 +56,23 @@ interface ProfilePreferences {
   reader_translation?: string | null; 
   reader_hebrew_style?: 'niqqud' | 'no-niqqud' | null;
   last_book?: string | null;
-  last_chapter?: number | null;
+  last_chapter?: string | number | null;
 }
 export interface HistoryLocation {
   book: string;
-  chapter: number;
+  chapter: string | number;
   verse?: number;
 }
 
-const VerseSkeleton = () => (
-  <div className="p-6 border-b border-slate-100 dark:border-slate-800 animate-pulse space-y-6">
-    <div className="flex gap-6 items-start" dir="rtl"><div className="w-8 h-6 bg-slate-100 dark:border-slate-800 rounded mt-1" /><div className="flex-1 space-y-3"><div className="h-8 bg-slate-100 dark:border-slate-800 rounded w-full ml-auto" /><div className="h-8 bg-slate-100 dark:border-slate-800 rounded w-5/6 ml-auto" /></div></div>
-    <div className="flex gap-6 items-start" dir="ltr"><div className="w-8 h-4 bg-slate-50 dark:bg-slate-900 rounded mt-1.5" /><div className="flex-1 space-y-2"><div className="h-5 bg-slate-50 dark:bg-slate-900 rounded w-full" /><div className="h-5 bg-slate-50 dark:bg-slate-900 rounded w-2/3" /></div></div>
-  </div>
-);
-
 interface ReaderPageProps {
   bookName?: string;
-  chapterNumber?: number;
+  chapterNumber?: string | number;
   initialVerses?: Verse[]; 
   initialHebrewTitle?: string; 
+  initialChapterLabel?: string | null;
 }
 
-export const ReaderPage = ({ bookName, chapterNumber, initialVerses, initialHebrewTitle }: ReaderPageProps) => {
+export const ReaderPage = ({ bookName, chapterNumber, initialVerses, initialHebrewTitle, initialChapterLabel }: ReaderPageProps) => {
   const router = useRouter();
   const params = useParams();
   const searchParams = useSearchParams();
@@ -84,7 +97,9 @@ export const ReaderPage = ({ bookName, chapterNumber, initialVerses, initialHebr
   const [availableTranslations, setAvailableTranslations] = useState<{slug: string, name: string}[]>([]);
   const [activeTranslation, setActiveTranslation] = useState<string>('JPS');
 
-  // --- Reference Navigation Backstack ---
+  const [prevChapter, setPrevChapter] = useState<string | null>(null);
+  const [nextChapter, setNextChapter] = useState<string | null>(null);
+
   const [navigationHistory, setNavigationHistory] = useState<HistoryLocation[]>([]);
 
   const activeBook = useMemo(() => {
@@ -99,10 +114,11 @@ export const ReaderPage = ({ bookName, chapterNumber, initialVerses, initialHebr
       .join(' ');
   }, [params?.book, bookName]);
 
-  const activeChapter = Number(params?.chapter ?? chapterNumber ?? 1);
+  const activeChapter = params?.chapter ? decodeURIComponent(params.chapter as string) : String(chapterNumber || '1');
 
   const [verses, setVerses] = useState<Verse[]>(initialVerses || []);
   const [hebrewTitle, setHebrewTitle] = useState(initialHebrewTitle || '');
+  const [chapterLabel, setChapterLabel] = useState<string | null>(initialChapterLabel || null);
   const [isLoading, setIsLoading] = useState(!initialVerses); 
   const [fetchError, setFetchError] = useState<string | null>(null);
   const [selectedVerse, setSelectedVerse] = useState<Verse | null>(null);
@@ -110,6 +126,7 @@ export const ReaderPage = ({ bookName, chapterNumber, initialVerses, initialHebr
   const [selectedWordContext, setSelectedWordContext] = useState<VerseWord | null>(null);
 
   const dataRef = useRef({ book: activeBook, chapter: activeChapter, slug: activeTranslation });
+  const isAuthLoadingRef = useRef(false);
 
   const scrollToVerse = useCallback((vNum: number) => {
     setTimeout(() => {
@@ -131,9 +148,9 @@ export const ReaderPage = ({ bookName, chapterNumber, initialVerses, initialHebr
 
   useEffect(() => {
     const handleJumpEvent = (e: Event) => {
-      const customEvent = e as CustomEvent<{ book: string; chapter: number; verse: number }>;
+      const customEvent = e as CustomEvent<{ book: string; chapter: string | number; verse: number }>;
       const { book, chapter, verse } = customEvent.detail;
-      if (activeBook === book && activeChapter === chapter) {
+      if (activeBook === book && String(activeChapter) === String(chapter)) {
         scrollToVerse(verse);
       }
     };
@@ -141,7 +158,6 @@ export const ReaderPage = ({ bookName, chapterNumber, initialVerses, initialHebr
     return () => window.removeEventListener('reader-jump-to-verse', handleJumpEvent);
   }, [activeBook, activeChapter, scrollToVerse]);
 
-  // --- Global History Logger ---
   useEffect(() => {
     const handleLogHistory = () => {
       setNavigationHistory(prev => {
@@ -150,10 +166,8 @@ export const ReaderPage = ({ bookName, chapterNumber, initialVerses, initialHebr
           chapter: activeChapter,
           verse: selectedVerse?.verse_num || selectedVerse?.verse_number
         };
-        
-        // Prevent duplicate consecutive entries if user clicks multiple links without moving
         const last = prev[prev.length - 1];
-        if (last && last.book === currentLoc.book && last.chapter === currentLoc.chapter && last.verse === currentLoc.verse) {
+        if (last && last.book === currentLoc.book && String(last.chapter) === String(currentLoc.chapter) && last.verse === currentLoc.verse) {
           return prev;
         }
         return [...prev, currentLoc];
@@ -169,7 +183,7 @@ export const ReaderPage = ({ bookName, chapterNumber, initialVerses, initialHebr
       const newHistory = [...prev];
       const lastLoc = newHistory.pop();
       if (lastLoc) {
-        const path = `/read/${encodeURIComponent(lastLoc.book)}/${lastLoc.chapter}${lastLoc.verse ? `?v=${lastLoc.verse}` : ''}`;
+        const path = `/read/${encodeURIComponent(lastLoc.book)}/${encodeURIComponent(String(lastLoc.chapter))}${lastLoc.verse ? `?v=${lastLoc.verse}` : ''}`;
         router.push(path);
       }
       return newHistory;
@@ -204,10 +218,7 @@ export const ReaderPage = ({ bookName, chapterNumber, initialVerses, initialHebr
       
       if (prefs.reader_translation) {
         const legacyMap: Record<string, string> = {
-          'jps1917': 'JPS',
-          'modernized': 'Modernized',
-          'web': 'WEB',
-          'tbv': 'TBV'
+          'jps1917': 'JPS', 'modernized': 'Modernized', 'web': 'WEB', 'tbv': 'TBV'
         };
         const mappedSlug = legacyMap[prefs.reader_translation] || prefs.reader_translation;
         setTranslation(mappedSlug);
@@ -216,10 +227,14 @@ export const ReaderPage = ({ bookName, chapterNumber, initialVerses, initialHebr
   }, []);
 
   useEffect(() => {
+    if (isAuthLoadingRef.current) return;
+    isAuthLoadingRef.current = true;
+
     supabase.auth.getSession().then(({ data: { session } }) => {
       setUser(session?.user ?? null);
       if (session?.user) fetchUserProfilePreference(session.user.id);
       setIsAuthSettled(true);
+      isAuthLoadingRef.current = false;
     });
     
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
@@ -288,9 +303,17 @@ export const ReaderPage = ({ bookName, chapterNumber, initialVerses, initialHebr
       setFetchError(null);
       
       try {
-        const { data: bookData } = await supabase.from('books').select('name_en, name_he, category, collection').ilike('name_en', activeBook).single();
+        const { data: bookData } = await supabase.from('books').select('id, name_en, name_he, category, collection').ilike('name_en', activeBook).single();
         if (!bookData) throw new Error(`Book "${activeBook}" not found.`);
         setHebrewTitle(bookData.name_he);
+
+        const { data: currentChap } = await supabase.from('chapters').select('order_id').eq('book_id', bookData.id).eq('chapter_number', activeChapter).single();
+        if (currentChap) {
+           const { data: prevData } = await supabase.from('chapters').select('chapter_number').eq('book_id', bookData.id).eq('order_id', currentChap.order_id - 1).maybeSingle();
+           setPrevChapter(prevData?.chapter_number || null);
+           const { data: nextData } = await supabase.from('chapters').select('chapter_number').eq('book_id', bookData.id).eq('order_id', currentChap.order_id + 1).maybeSingle();
+           setNextChapter(nextData?.chapter_number || null);
+        }
         
         const { data: existingSlugsData } = await supabase
           .from('reader_verses_view')
@@ -300,14 +323,11 @@ export const ReaderPage = ({ bookName, chapterNumber, initialVerses, initialHebr
           .not('translation_slug', 'is', null);
 
         const actualSlugs = new Set(existingSlugsData?.map(row => row.translation_slug) || []);
-
         const { data: allTranslations } = await supabase.from('translations').select('*').order('name');
-        
         const chapterKey = `${bookData.name_en}.${activeChapter}`;
         
         const availableTrans = (allTranslations || []).filter(t => {
           if (!actualSlugs.has(t.slug)) return false;
-
           if (t.target_collections?.includes(bookData.collection)) return true;
           if (t.target_categories?.includes(bookData.category)) return true;
           if (t.target_books?.includes(bookData.name_en)) return true;
@@ -318,23 +338,18 @@ export const ReaderPage = ({ bookName, chapterNumber, initialVerses, initialHebr
         setAvailableTranslations(availableTrans);
 
         let effectiveSlug = translation;
-        
         if (effectiveSlug === 'default') {
-          effectiveSlug = bookData.collection === 'Christianity' ? 'WEB' : 'JPS';
+          effectiveSlug = (bookData.collection === 'Christianity' || bookData.collection === 'Second Temple') ? 'WEB' : 'JPS';
         }
 
         if (!availableTrans.some(t => t.slug === effectiveSlug)) {
-          effectiveSlug = availableTrans.length > 0 ? availableTrans[0].slug : (bookData.collection === 'Christianity' ? 'WEB' : 'JPS');
+          effectiveSlug = availableTrans.length > 0 ? availableTrans[0].slug : ((bookData.collection === 'Christianity' || bookData.collection === 'Second Temple') ? 'WEB' : 'JPS');
         }
         
         setActiveTranslation(effectiveSlug);
 
-        if (dataRef.current.book === activeBook && 
-            dataRef.current.chapter === activeChapter && 
-            dataRef.current.slug === effectiveSlug && 
-            verses.length > 0) {
-          setIsLoading(false);
-          return;
+        if (dataRef.current.book === activeBook && dataRef.current.chapter === activeChapter && dataRef.current.slug === effectiveSlug && verses.length > 0) {
+          setIsLoading(false); return;
         }
         
         let versesQuery = supabase
@@ -344,24 +359,24 @@ export const ReaderPage = ({ bookName, chapterNumber, initialVerses, initialHebr
             .eq('chapter_num', activeChapter)
             .order('verse_num', { ascending: true });
 
-        if (availableTrans.length > 0) {
-            versesQuery = versesQuery.eq('translation_slug', effectiveSlug);
-        } else {
-            versesQuery = versesQuery.is('translation_slug', null);
-        }
+        if (availableTrans.length > 0) versesQuery = versesQuery.eq('translation_slug', effectiveSlug);
+        else versesQuery = versesQuery.is('translation_slug', null);
         
         const { data: versesData } = await versesQuery;
         
+        if (versesData && versesData.length > 0) {
+          const firstVerse = versesData[0] as Record<string, unknown>;
+          setChapterLabel((firstVerse.chapter_label as string) || null);
+        }
+
         setVerses((versesData || []) as Verse[]);
         dataRef.current = { book: activeBook, chapter: activeChapter, slug: effectiveSlug };
       } catch (err: unknown) { 
-        const errorMessage = err instanceof Error ? err.message : String(err);
-        setFetchError(errorMessage); 
+        setFetchError(err instanceof Error ? err.message : String(err)); 
       } finally { 
         setIsLoading(false); 
       }
     };
-
     if (activeBook) fetchVersesData();
   }, [activeBook, activeChapter, verses.length, translation]); 
 
@@ -384,12 +399,11 @@ export const ReaderPage = ({ bookName, chapterNumber, initialVerses, initialHebr
           <ReaderHeader 
             isSidebarOpen={isSidebarOpen} toggleSidebar={() => setIsSidebarOpen(!isSidebarOpen)}
             isInsightsOpen={isInsightsOpen} toggleInsights={() => setIsInsightsOpen(!isInsightsOpen)}
-            activeBook={activeBook} activeChapter={activeChapter} hebrewTitle={hebrewTitle}
-            handlePrevChapter={() => activeChapter > 1 && router.push(`/read/${encodeURIComponent(activeBook)}/${activeChapter - 1}`)}
-            handleNextChapter={() => router.push(`/read/${encodeURIComponent(activeBook)}/${activeChapter + 1}`)}
+            activeBook={activeBook} activeChapter={activeChapter} chapterLabel={chapterLabel} hebrewTitle={hebrewTitle}
+            handlePrevChapter={prevChapter ? () => router.push(`/read/${encodeURIComponent(activeBook)}/${encodeURIComponent(prevChapter)}`) : undefined}
+            handleNextChapter={nextChapter ? () => router.push(`/read/${encodeURIComponent(activeBook)}/${encodeURIComponent(nextChapter)}`) : undefined}
             languageMode={languageMode} setLanguageMode={handleSetLanguageMode}
-            translation={translation} 
-            setTranslation={handleSetTranslation}
+            translation={translation} setTranslation={handleSetTranslation}
             availableTranslations={availableTranslations}
             hebrewStyle={hebrewStyle} setHebrewStyle={handleSetHebrewStyle}
             navigationHistory={navigationHistory}
@@ -435,7 +449,6 @@ export const ReaderPage = ({ bookName, chapterNumber, initialVerses, initialHebr
         </div>
       </main>
 
-      {/* Conditionally Render Lazy Loaded Components */}
       {isManageGroupsOpen && user && (
         <GroupManagementModal 
           isOpen={isManageGroupsOpen} 

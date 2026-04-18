@@ -62,7 +62,18 @@ export const HebrewVerseRenderer = ({
     <div className={`${fontSizeClass} text-right font-hebrew text-slate-900 dark:text-slate-100 flex flex-wrap gap-x-1.5 sm:gap-x-2 max-w-full relative`} dir="rtl">
       {words.map((w, index) => {
         const cleanText = w.text.replace(/\//g, '');
-        const displayText = hebrewStyle === 'niqqud' ? cleanText : cleanText.replace(/[\u0591-\u05C7]/g, '');
+        
+        // 1. Separate punctuation from the core word so it sits outside the highlight span
+        const match = cleanText.match(/^([.,!?;:()"“”‘’<>··\[\]\u05C3]*)(.*?)([.,!?;:()"“”‘’<>··\[\]\u05C3]*)$/);
+        const leadingPunct = match ? match[1] : '';
+        const coreWord = match ? match[2] : cleanText;
+        const trailingPunct = match ? match[3] : '';
+
+        // 2. Strip cantillation (Teamim) from the highlighted word for cleaner reading
+        const CANTILLATION_REGEX = /[\u0591-\u05AF\u05BD\u05BF\u05C0\u05C4\u05C5\u05C6]/g;
+        const displayCoreWithNiqqud = coreWord.replace(CANTILLATION_REGEX, '');
+        const displayText = hebrewStyle === 'niqqud' ? displayCoreWithNiqqud : coreWord.replace(/[\u0591-\u05C7]/g, '');
+        
         const isTargetWord = highlightStrongs && w.strongs === highlightStrongs;
         const { pos, grammar } = decodeHebrewMorphology(w.morph);
         
@@ -71,21 +82,24 @@ export const HebrewVerseRenderer = ({
           : "hover:bg-slate-100 dark:hover:bg-slate-800";
 
         return (
-          <span
-            key={w.id || index}
-            onMouseEnter={handleMouseEnter}
-            onClick={(e) => { if (onWordClick) { e.stopPropagation(); onWordClick(w); } }}
-            className={`relative group/word rounded-lg px-0.5 sm:px-1 transition-all inline-block hover:z-50 cursor-pointer active:scale-95 ${highlightClasses}`}
-          >
-            {displayText}
-            <WordTooltip 
-              word={w} 
-              placement={tooltipConfig.placement} 
-              align={tooltipConfig.align}
-              verseTranslation={verseTranslation} 
-              pos={pos}
-              grammar={grammar}
-            />
+          <span key={w.id || index} className="inline-block relative whitespace-nowrap">
+            {leadingPunct}
+            <span
+              onMouseEnter={handleMouseEnter}
+              onClick={(e) => { if (onWordClick) { e.stopPropagation(); onWordClick(w); } }}
+              className={`relative group/word rounded-md px-0.5 transition-all inline-block hover:z-50 cursor-pointer active:scale-95 ${highlightClasses}`}
+            >
+              {displayText}
+              <WordTooltip 
+                word={w} 
+                placement={tooltipConfig.placement} 
+                align={tooltipConfig.align}
+                verseTranslation={verseTranslation} 
+                pos={pos}
+                grammar={grammar}
+              />
+            </span>
+            {trailingPunct}
           </span>
         );
       })}

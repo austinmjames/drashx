@@ -45,7 +45,7 @@ interface NotificationPayload {
 interface InsightsPanelProps {
   user: SupabaseUser | null;
   activeBook: string;
-  activeChapter: number;
+  activeChapter: string | number; // FIX: Updated to support text-based chapters
   selectedVerse: Verse | null;
   isLoading: boolean;
   onSelectVerse?: (verse: Verse) => void;

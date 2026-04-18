@@ -2,7 +2,6 @@
 import React, { useState } from 'react';
 import { X } from 'lucide-react';
 import { ProfileTab } from './ProfileTab';
-import { PreferencesTab } from './PreferencesTab';
 import { SecurityTab } from './SecurityTab';
 import { StatsTab } from './StatsTab';
 
@@ -11,7 +10,7 @@ interface ProfileSettingsProps {
   onClose: () => void;
 }
 
-type SettingsTab = 'profile' | 'preferences' | 'security' | 'stats';
+type SettingsTab = 'profile' | 'security' | 'stats';
 
 export const ProfileSettings = ({ userId, onClose }: ProfileSettingsProps) => {
   const [activeTab, setActiveTab] = useState<SettingsTab>('profile');
@@ -32,7 +31,6 @@ export const ProfileSettings = ({ userId, onClose }: ProfileSettingsProps) => {
       {/* Tabs */}
       <div className="flex px-6 border-b border-slate-100 dark:border-slate-800 gap-6 overflow-x-auto scrollbar-hide">
         <button onClick={() => setActiveTab('profile')} className={`py-4 text-xs font-bold uppercase tracking-wider transition-all border-b-2 whitespace-nowrap ${activeTab === 'profile' ? 'border-indigo-600 text-indigo-600' : 'border-transparent text-slate-400 hover:text-slate-600 dark:hover:text-slate-300'}`}>Profile</button>
-        <button onClick={() => setActiveTab('preferences')} className={`py-4 text-xs font-bold uppercase tracking-wider transition-all border-b-2 whitespace-nowrap ${activeTab === 'preferences' ? 'border-indigo-600 text-indigo-600' : 'border-transparent text-slate-400 hover:text-slate-600 dark:hover:text-slate-300'}`}>Library</button>
         <button onClick={() => setActiveTab('security')} className={`py-4 text-xs font-bold uppercase tracking-wider transition-all border-b-2 whitespace-nowrap ${activeTab === 'security' ? 'border-indigo-600 text-indigo-600' : 'border-transparent text-slate-400 hover:text-slate-600 dark:hover:text-slate-300'}`}>Security</button>
         <button onClick={() => setActiveTab('stats')} className={`py-4 text-xs font-bold uppercase tracking-wider transition-all border-b-2 whitespace-nowrap ${activeTab === 'stats' ? 'border-indigo-600 text-indigo-600' : 'border-transparent text-slate-400 hover:text-slate-600 dark:hover:text-slate-300'}`}>Stats</button>
       </div>
@@ -40,7 +38,6 @@ export const ProfileSettings = ({ userId, onClose }: ProfileSettingsProps) => {
       {/* Content Area */}
       <div className="p-8 max-h-[75vh] overflow-y-auto scrollbar-hide relative">
         {activeTab === 'profile' && <ProfileTab userId={userId} />}
-        {activeTab === 'preferences' && <PreferencesTab userId={userId} />}
         {activeTab === 'security' && <SecurityTab />}
         {activeTab === 'stats' && <StatsTab userId={userId} />}
       </div>
